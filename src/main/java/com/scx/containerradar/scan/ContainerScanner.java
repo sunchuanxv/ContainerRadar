@@ -1,6 +1,7 @@
 package com.scx.containerradar.scan;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.Container;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
@@ -66,17 +67,9 @@ public final class ContainerScanner {
             BlockEntity be = level.getBlockEntity(pos);
 
             // 【第二步】问这个方块实体：「你能装物品吗？」
-            //
-            // 先判 be != null 再调方法，靠 && 的短路特性避免空指针。
-            // 如果把 be != null 挪到后面，be 为 null 时第一个条件就炸了。
-            //
-            // getCapability(...) 返回 LazyOptional，语义是「我可能提供这个能力，也可能不提供」。
-            // isPresent() 为 true 才代表这个方块真的提供了物品存储能力。
-            //
-            // 为什么不用 instanceof Container？
-            //   Container 是原版接口，很多模组容器不实现它、或只实现一部分；
-            //   ITEM_HANDLER 是 Forge 统一的物品存储契约，跨模组通用，才是正确做法。
-            if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) {
+            // 判断逻辑抽到了下面的 isContainer()，因为指令（跑在服务端）和渲染器（跑在客户端）
+            // 必须用同一套标准，不能各写一份 —— 哪天标准变了只改一处。
+            if (isContainer(be)) {
 
                 // 【第三步】记录这个坐标。
                 //
@@ -90,5 +83,39 @@ public final class ContainerScanner {
         }
 
         return result;
+    }
+
+    /**
+     * 判断一个方块实体是不是「容器」。
+     *
+     * <p>这里用<b>两个条件</b>，而不是只看能力，原因很实际：
+     *
+     * <ol>
+     *   <li><b>ITEM_HANDLER 能力</b>：Forge 统一的物品存储契约。装了模组容器
+     *       （铁箱子、精妙存储、Create 仓库等）时，这是最可靠的判断依据。</li>
+     *   <li><b>instanceof Container</b>：原版接口。加这个兜底是因为扫描可能发生在
+     *       <b>客户端世界</b>（渲染器就是这么用的），而客户端的方块实体不一定都暴露了
+     *       capability。原版箱子、Lootr 箱子都实现了 Container，兜底能保证它们在客户端也被认出来。</li>
+     * </ol>
+     *
+     * <p>换句话说：能力优先，接口兜底。两个都不满足才算不是容器。
+     *
+     * @param be 可能为 {@code null}（普通方块没有方块实体）
+     * @return 是容器返回 true
+     */
+    private static boolean isContainer(BlockEntity be) {
+        // 先挡掉 null，后面就可以放心调方法了。
+        // 这个判断放在方法内部，而不是让每个调用点自己判，能避免漏判导致的空指针。
+        if (be == null) {
+            return false;
+        }
+
+        // 条件一：有物品存储能力（跨模组通用）
+        if (be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) {
+            return true;
+        }
+
+        // 条件二：实现了原版 Container 接口（客户端兜底）
+        return be instanceof Container;
     }
 }
