@@ -2,8 +2,10 @@ package com.scx.containerradar.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.scan.ContainerScanner;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
@@ -13,26 +15,27 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.List;
 
 /**
- * 指令 {@code /cr scan [半径]}：扫描周围并列出找到的容器。
+ * {@code /cr} 指令树：扫描、增删自定义方块白名单。
  *
- * <p>这个类只负责三件事：声明指令结构、从上下文里取参数、把结果打印到聊天栏。
- * 真正的扫描逻辑在 {@link ContainerScanner} 里，两边通过「传参 + 收返回值」通信，
- * 互不知道对方内部怎么实现 —— 这就是为什么扫描逻辑要单独抽一个类。
- *
- * <p>指令结构：
+ * <p>完整用法：
  * <pre>
- *   /cr scan          使用默认半径（32 格）
- *   /cr scan 64       指定半径（1 ~ 128 格）
+ *   /cr scan            扫描周围 32 格
+ *   /cr scan 64         指定半径（1 ~ 128）
+ *   /cr add ancient_debris      加入白名单（可省略 minecraft: 前缀）
+ *   /cr add create:zinc_ore     带命名空间的模组方块
+ *   /cr remove ancient_debris   移出白名单
+ *   /cr list            查看当前白名单
  * </pre>
  *
- * <p>注意：指令是在<b>逻辑服务端</b>执行的。单人游戏里也有一个内置服务端，
- * 所以能正常用；但如果你以后要在别人的服务器上用，服务端必须也装这个模组，
- * 或者改成纯客户端的键位触发（阶段 06 会做）。
+ * <p>设计上这个类只做「解析输入 → 调用逻辑 → 格式化输出」，
+ * 扫描在 {@link ContainerScanner}，白名单在 {@link BlockFilter}。
+ * 想让指令换个样子改这里就行，不会影响功能本身。
  */
 public final class ScanCommand {
 
@@ -42,101 +45,91 @@ public final class ScanCommand {
     /** 聊天栏最多列出多少个坐标，避免一次刷屏几百行。 */
     private static final int MAX_LISTED = 10;
 
+    /** /cr list 最多显示多少条，避免白名单塞了几百个时刷屏。 */
+    private static final int MAX_FILTER_LISTED = 20;
+
     private ScanCommand() {
     }
 
     /**
-     * 把 {@code /cr} 这条指令注册进游戏。
+     * 把 {@code /cr} 这棵指令树注册进游戏。
      *
-     * <p>由主类在 {@code RegisterCommandsEvent} 里调用 —— 那个事件是 Forge 在
-     * 「准备注册所有指令」时发出的，只有在这个时机注册才有效。
-     *
-     * @param dispatcher Brigadier 的指令分发器，游戏里所有指令都挂在它上面
+     * <p>读法：{@code Commands.literal("cr")} 是根节点，每个 {@code .then(...)} 是它下面的一个分支。
+     * 几个分支之间是<b>并列</b>关系（scan / add / remove / list），不是嵌套。
      */
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
-
-        // Commands.literal(...) = 一个固定的字面量节点，玩家必须原样敲出这个词。
-        // 所以整棵树的读法是：/cr → scan →（可选）一个整数参数
         dispatcher.register(
                 Commands.literal("cr")
+
+                        // --- /cr scan [radius] ---
                         .then(Commands.literal("scan")
-
-                                // .executes(...) = 「玩家只敲到 /cr scan 就回车」时执行什么
-                                .executes(ctx -> execute(ctx, DEFAULT_RADIUS))
-
-                                // .then(...) = 「/cr scan 后面还能再接什么」
-                                // IntegerArgumentType.integer(1, 128) = 一个 1~128 的整数参数。
-                                // 敲 /cr scan 999 或 /cr scan abc 会在进入你的方法「之前」就被 Brigadier 拒绝，
-                                // 你不需要自己写校验 —— 这是用 Brigadier 而不是手撸字符串解析的最大好处
+                                .executes(ctx -> executeScan(ctx, DEFAULT_RADIUS))
                                 .then(Commands.argument("radius", IntegerArgumentType.integer(1, 128))
-                                        .executes(ctx -> execute(ctx, IntegerArgumentType.getInteger(ctx, "radius"))))
-                        )
+                                        .executes(ctx -> executeScan(ctx, IntegerArgumentType.getInteger(ctx, "radius")))))
+
+                        // --- /cr add <block> ---
+                        // 这里必须用 StringArgumentType.string() 而不是 word()：
+                        // word() 不允许冒号，minecraft:chest 这种 ID 会直接解析失败。
+                        // 这个坑很隐蔽 —— 参数类型选错，玩家输入什么都是"格式错误"。
+                        .then(Commands.literal("add")
+                                .then(Commands.argument("block", StringArgumentType.string())
+                                        .executes(ctx -> executeAdd(ctx, StringArgumentType.getString(ctx, "block")))))
+
+                        // --- /cr remove <block> ---
+                        .then(Commands.literal("remove")
+                                .then(Commands.argument("block", StringArgumentType.string())
+                                        .executes(ctx -> executeRemove(ctx, StringArgumentType.getString(ctx, "block")))))
+
+                        // --- /cr list ---
+                        .then(Commands.literal("list")
+                                .executes(ScanCommand::executeList))
         );
     }
 
+    // ==================================================================
+    // /cr scan
+    // ==================================================================
+
     /**
-     * 真正干活的方法。
+     * 扫描并列出周围的目标（容器 + 自定义方块）。
      *
-     * @param ctx    指令上下文，能从里面取到「谁执行了这条指令」「在哪个世界」
-     * @param radius 已经校验过范围的半径
-     * @return 找到的容器数量。Brigadier 会把这个数字作为「指令结果」，
-     *         可用于计分板、命令方块条件判断等场景，这里顺便让它有意义
-     * @throws CommandSyntaxException 当执行者不是玩家（比如从服务器控制台敲）时抛出，
-     *                                Brigadier 会自动把异常翻译成聊天栏里的红字提示
+     * @return 找到的目标数量，Brigadier 会把它作为指令结果
      */
-    private static int execute(CommandContext<CommandSourceStack> ctx, int radius) throws CommandSyntaxException {
-
-        // getPlayerOrException()：取执行这条指令的玩家。
-        // 如果是从控制台敲的，这里会抛异常 —— 所以它比 getPlayer() 更适合我们
+    private static int executeScan(CommandContext<CommandSourceStack> ctx, int radius) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
-
-        // getLevel()：取这条指令所在的逻辑服务端世界。
-        // 注意这里绝不能用 Minecraft.getInstance().level —— 那是客户端那份世界对象，
-        // 在服务端代码里用它，轻则拿到 null，重则在专用服务器上直接崩溃
         ServerLevel level = ctx.getSource().getLevel();
-
-        // blockPosition()：玩家脚下那个方块的整数坐标，作为扫描中心
         BlockPos center = player.blockPosition();
 
-        // 用纳秒计时再换算成毫秒。这是为了让你直观看到「27 万个坐标要扫多久」，
-        // 也为阶段 03 的性能优化留一个可对比的基准数字
         long startNanos = System.nanoTime();
-        List<BlockPos> found = ContainerScanner.findContainers(level, center, radius);
+        List<BlockPos> found = ContainerScanner.findTargets(level, center, radius);
         long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;
 
-        // sendSuccess(Supplier<Component>, boolean)
-        //   第一个参数是消息内容。传 Supplier（lambda）而不是直接传 Component，
-        //   是为了在消息不需要显示时省掉拼接开销
-        //   第二个参数 false = 这条消息不写进服务器日志，避免刷日志
-        //
-        // .withStyle(ChatFormatting.AQUA) = 给文字上色，AQUA 是青色
         ctx.getSource().sendSuccess(
                 () -> Component.literal("[ContainerRadar] 半径 " + radius + " 内找到 "
-                        + found.size() + " 个容器，耗时 " + elapsedMs + " ms")
+                        + found.size() + " 个目标（容器 + 自定义方块），耗时 " + elapsedMs + " ms")
                         .withStyle(ChatFormatting.AQUA),
                 false);
 
-        // 最多列 10 个坐标，避免一次刷屏
         int shown = Math.min(found.size(), MAX_LISTED);
         for (int i = 0; i < shown; i++) {
             BlockPos pos = found.get(i);
 
-            // 把方块对象反查成它的注册名（如 minecraft:chest、lootr:chest）。
-            // ForgeRegistries.BLOCKS 是「所有已注册方块」的注册表，
-            // getKey(block) 拿到它在表里的名字。这是最直观的调试手段：
-            // 你能一眼看出扫到的是原版箱子还是某个模组的箱子
-            ResourceLocation id = ForgeRegistries.BLOCKS.getKey(level.getBlockState(pos).getBlock());
+            // 只查一次方块状态，后面两个用途共用（省一次区块查找）
+            net.minecraft.world.level.block.state.BlockState state = level.getBlockState(pos);
+            ResourceLocation id = ForgeRegistries.BLOCKS.getKey(state.getBlock());
 
-            // 这里的 pos 和 id 都是循环体内的局部变量，Java 要求 lambda 捕获的必须是
-            // 「有效 final」变量；在循环体内声明且不重新赋值，正好满足这个条件
+            // 标出它是「容器」还是「白名单方块」，排查问题非常有用：
+            // 加了一个方块却没高亮，看这里标的是 [容器] 还是 [方块]，就知道是哪条逻辑生效了
+            boolean whitelisted = !BlockFilter.isEmpty() && BlockFilter.matches(state);
+            String tag = whitelisted ? "[方块]" : "[容器]";
+
             ctx.getSource().sendSuccess(
                     () -> Component.literal("  (" + pos.getX() + ", " + pos.getY() + ", "
-                            + pos.getZ() + ")  " + id)
+                            + pos.getZ() + ")  " + id + "  " + tag)
                             .withStyle(ChatFormatting.GRAY),
                     false);
         }
 
-        // 超过 10 个时给个提示，否则玩家会以为只找到这些
         if (found.size() > shown) {
             int rest = found.size() - shown;
             ctx.getSource().sendSuccess(
@@ -145,5 +138,99 @@ public final class ScanCommand {
         }
 
         return found.size();
+    }
+
+    // ==================================================================
+    // /cr add
+    // ==================================================================
+
+    private static int executeAdd(CommandContext<CommandSourceStack> ctx, String input) {
+        ResourceLocation id = BlockFilter.parseId(input);
+
+        // 三种失败情况分开报错，比统一说"失败"有用得多
+        if (id == null) {
+            return error(ctx, "方块 ID 格式不对：" + input + "（应形如 minecraft:ancient_debris）");
+        }
+        if (!BlockFilter.isRegisteredBlock(id)) {
+            return error(ctx, "找不到这个方块：" + id + "（注意 ID 必须全小写）");
+        }
+
+        // 空气也是"已注册的方块"，但把它加进白名单毫无意义（而且会满屏框）：
+        // 空气到处都是，一旦加进去，半径 16 内会有几千个方块被高亮。所以单独挡一道。
+        if (ForgeRegistries.BLOCKS.getValue(id) == Blocks.AIR) {
+            return error(ctx, "不能把空气加入白名单");
+        }
+
+        if (!BlockFilter.add(id)) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal(id + " 已经在白名单里了").withStyle(ChatFormatting.GRAY), false);
+            return 0;
+        }
+
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("已加入白名单：" + id + "（高亮会在 1 秒内出现）")
+                        .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    // ==================================================================
+    // /cr remove
+    // ==================================================================
+
+    private static int executeRemove(CommandContext<CommandSourceStack> ctx, String input) {
+        ResourceLocation id = BlockFilter.parseId(input);
+        if (id == null) {
+            return error(ctx, "方块 ID 格式不对：" + input);
+        }
+
+        if (!BlockFilter.remove(id)) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal(id + " 不在白名单里").withStyle(ChatFormatting.GRAY), false);
+            return 0;
+        }
+
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("已从白名单移除：" + id).withStyle(ChatFormatting.YELLOW), false);
+        return 1;
+    }
+
+    // ==================================================================
+    // /cr list
+    // ==================================================================
+
+    private static int executeList(CommandContext<CommandSourceStack> ctx) {
+        List<ResourceLocation> ids = BlockFilter.ids();
+
+        if (ids.isEmpty()) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal("白名单是空的。用 /cr add <方块ID> 添加，例如 /cr add ancient_debris")
+                            .withStyle(ChatFormatting.GRAY), false);
+            return 0;
+        }
+
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("自定义方块白名单（共 " + ids.size() + " 个）：")
+                        .withStyle(ChatFormatting.AQUA), false);
+
+        int shown = Math.min(ids.size(), MAX_FILTER_LISTED);
+        for (int i = 0; i < shown; i++) {
+            ResourceLocation id = ids.get(i);
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal("  " + id).withStyle(ChatFormatting.GRAY), false);
+        }
+
+        if (ids.size() > shown) {
+            int rest = ids.size() - shown;
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal("  ……还有 " + rest + " 个").withStyle(ChatFormatting.DARK_GRAY), false);
+        }
+
+        return ids.size();
+    }
+
+    /** 统一的错误输出：红色文字 + 返回 0（表示指令执行失败）。 */
+    private static int error(CommandContext<CommandSourceStack> ctx, String message) {
+        ctx.getSource().sendFailure(Component.literal("[ContainerRadar] " + message).withStyle(ChatFormatting.RED));
+        return 0;
     }
 }

@@ -1,5 +1,6 @@
 package com.scx.containerradar.scan;
 
+import com.scx.containerradar.filter.BlockFilter;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.Container;
 import net.minecraft.world.level.Level;
@@ -32,16 +33,19 @@ public final class ContainerScanner {
     }
 
     /**
-     * 找出以 center 为中心、radius 为半径的立方体范围内所有容器。
+     * 找出以 center 为中心、radius 为半径的立方体范围内所有「扫描目标」。
+     *
+     * <p>「目标」= 容器 <b>或</b> 玩家加进白名单的任意方块。两者都算，是因为它们对玩家来说
+     * 是一回事：「我想穿墙看到它」。
      *
      * @param level  要扫描的世界。用 Level 而不是 ClientLevel，
      *               因为服务端和客户端各自持有一份 World 对象，扫描要以「方块实体数据在哪里」为准
      * @param center 扫描中心，通常是玩家的脚下方块坐标
      * @param radius 半径（方块数）。实际扫描体积是 (2*radius+1)^3 个坐标，
      *               radius=32 时约 27 万个位置，所以这是个「重」方法，绝对不能每帧调用
-     * @return 所有容器的坐标。返回的是不可变副本，可以安全存进集合、跨帧持有
+     * @return 所有目标的坐标。返回的是不可变副本，可以安全存进集合、跨帧持有
      */
-    public static List<BlockPos> findContainers(Level level, BlockPos center, int radius) {
+    public static List<BlockPos> findTargets(Level level, BlockPos center, int radius) {
 
         // 用 List 声明，用 ArrayList 实现。调用方只关心「这是一串坐标」，
         // 不需要知道底层是数组还是链表 —— 这叫面向接口编程。
@@ -66,10 +70,16 @@ public final class ContainerScanner {
             // 所以「拿不到 BlockEntity」= 这个坐标顶多是个普通方块，可以直接跳过，性能上也是免费的。
             BlockEntity be = level.getBlockEntity(pos);
 
-            // 【第二步】问这个方块实体：「你能装物品吗？」
-            // 判断逻辑抽到了下面的 isContainer()，因为指令（跑在服务端）和渲染器（跑在客户端）
-            // 必须用同一套标准，不能各写一份 —— 哪天标准变了只改一处。
-            if (isContainer(be)) {
+            // 【第二步】判断这个坐标算不算「目标」。两个条件满足其一即可：
+            //   1. 它是容器（有物品存储能力，或实现了原版 Container 接口）
+            //   2. 玩家把它加进了自定义白名单（远古残骸、刷怪笼这类不是容器的方块）
+            //
+            // 第二个条件写成 !isEmpty() && matches(...) 是<有意的短路优化>：
+            // 白名单为空时（大多数玩家的情况）连 getBlockState 都不会调用，等于零成本。
+            // 如果改成 matches(...) 内部判空，每个坐标都要先查一次方块状态 —— 半径 16 就是白扫 3.6 万次。
+            boolean whitelisted = !BlockFilter.isEmpty() && BlockFilter.matches(level.getBlockState(pos));
+
+            if (isContainer(be) || whitelisted) {
 
                 // 【第三步】记录这个坐标。
                 //

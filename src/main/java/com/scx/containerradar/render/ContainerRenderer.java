@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.scx.containerradar.ContainerRadar;
+import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.scan.ContainerScanner;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
@@ -51,10 +52,11 @@ public final class ContainerRenderer {
     /** 玩家移动超过这个距离就立刻重扫。8 格的平方 = 64，用平方比较可以省掉开方运算。 */
     private static final double MOVE_THRESHOLD_SQ = 64.0D;
 
-    /** 线框颜色（RGBA，取值 0~1）。0.25/0.85/1.0 是一个偏青的蓝色。 */
-    private static final float RED = 0.25F;
-    private static final float GREEN = 0.85F;
-    private static final float BLUE = 1.00F;
+    /** 容器的颜色：偏青的蓝色（RGBA，取值 0~1）。 */
+    private static final float[] COLOR_CONTAINER = {0.25F, 0.85F, 1.00F};
+
+    /** 自定义白名单方块的颜色：橙黄。和容器用不同颜色，一眼能分清"这是箱子"还是"这是我加的方块"。 */
+    private static final float[] COLOR_CUSTOM = {1.00F, 0.72F, 0.20F};
 
     /** 第一遍（未遮挡）的透明度：比较实。 */
     private static final float ALPHA_SOLID = 0.90F;
@@ -178,14 +180,14 @@ public final class ContainerRenderer {
 
         // 【第四步·第一遍】带深度测试的实色框，只能看到没被遮挡的
         VertexConsumer solid = buffers.getBuffer(RenderType.lines());
-        drawAll(poseStack, solid, ALPHA_SOLID);
+        drawAll(level, poseStack, solid, ALPHA_SOLID);
         // endBatch 才是真正"交给显卡画"的时刻，不调用就什么都不显示。
         // 这里按类型分别提交，是为了让两遍用各自的状态（一个开深度、一个关深度）。
         buffers.endBatch(RenderType.lines());
 
         // 【第五步·第二遍】关掉深度测试的淡色框，能透过墙看到
         VertexConsumer ghost = buffers.getBuffer(SEE_THROUGH_LINES);
-        drawAll(poseStack, ghost, ALPHA_GHOST);
+        drawAll(level, poseStack, ghost, ALPHA_GHOST);
         buffers.endBatch(SEE_THROUGH_LINES);
 
         // 和上面的 pushPose 配对。不 pop 的话，这个 translate 会残留，
@@ -194,22 +196,28 @@ public final class ContainerRenderer {
     }
 
     /**
-     * 把缓存里所有容器都画一遍框。
+     * 把缓存里所有目标都画一遍框。
      *
+     * @param level     当前世界，用来判断每个坐标是"容器"还是"白名单方块"（决定颜色）
      * @param poseStack 已经做过摄像机偏移的坐标变换栈
      * @param consumer  顶点接收器（不同渲染类型对应不同实例）
      * @param alpha     透明度
      */
-    private static void drawAll(PoseStack poseStack, VertexConsumer consumer, float alpha) {
+    private static void drawAll(Level level, PoseStack poseStack, VertexConsumer consumer, float alpha) {
         for (BlockPos pos : cached) {
             // AABB = 轴对齐包围盒，就是一个方块大小的立方体。
             // inflate(0.002) 把它向外扩 2 毫米 —— 不加的话，框的坐标和方块表面完全重合，
             // 会互相"打架"（z-fighting），表现为线条闪烁、断裂。
             AABB box = new AABB(pos).inflate(0.002D);
 
+            // 判断颜色。这个查询每帧每个框一次，但框的数量只有几十个，开销可以忽略。
+            // 注意 != isEmpty() 的短路：白名单为空时根本不查方块状态
+            boolean custom = !BlockFilter.isEmpty() && BlockFilter.matches(level.getBlockState(pos));
+            float[] color = custom ? COLOR_CUSTOM : COLOR_CONTAINER;
+
             // LevelRenderer.renderLineBox 是原版现成的工具方法：给一个立方体，
             // 它会把 12 条棱都画出来。自己算 12 条线的顶点纯属重复劳动。
-            LevelRenderer.renderLineBox(poseStack, consumer, box, RED, GREEN, BLUE, alpha);
+            LevelRenderer.renderLineBox(poseStack, consumer, box, color[0], color[1], color[2], alpha);
         }
     }
 
@@ -235,7 +243,7 @@ public final class ContainerRenderer {
             return;
         }
 
-        cached = ContainerScanner.findContainers(level, playerPos, SCAN_RADIUS);
+        cached = ContainerScanner.findTargets(level, playerPos, SCAN_RADIUS);
 
         // 这里必须 immutable()：playerPos 是从玩家身上取的，后续可能被复用/修改，
         // 直接引用会让"上次扫描位置"跟着变，导致移动判断永远失效。
