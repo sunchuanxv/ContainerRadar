@@ -44,8 +44,8 @@ if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) 
 | `/cr scan` 调试指令（打印坐标与方块 ID） | 已完成 |
 | 穿墙线框渲染（双 pass：近处实色 / 墙后淡色） | 已完成 |
 | 自定义方块白名单（任意方块可高亮） | 已完成 |
+| Lootr「已开启 / 未开启」状态差异化着色 | 已完成 |
 | 准星选取 / 从 JEI 拖拽添加方块 | 计划中 |
-| Lootr「已开启 / 未开启」状态差异化着色 | 计划中 |
 | 图形化方块选择界面 | 计划中 |
 
 ## 环境要求
@@ -75,8 +75,37 @@ gradlew.bat build
 
 ### 高亮
 
-装好即生效：附近 16 格内的容器会显示**青色**线框。没被遮挡的框较实，
-被墙挡住的会以淡色透出来 —— 这样你能同时判断"它在哪"和"它离我多远"。
+装好即生效：附近 16 格内的目标会显示线框。没被遮挡的框较实，被墙挡住的会以淡色透出来 ——
+这样你能同时判断"它在哪"和"它离我多远"。颜色区分四种含义：
+
+| 颜色 | 含义 |
+| --- | --- |
+| 青色 | 普通容器（自己放的箱子、木桶、漏斗……） |
+| 金色 | **Lootr 容器，你还没开过 —— 里面有属于你的战利品** |
+| 灰色 | **Lootr 容器，你已经开过了 —— 不用再跑一趟** |
+| 橙色 | 你在自定义白名单里加的方块 |
+
+### Lootr 兼容是怎么做的
+
+Lootr 的容器方块实体实现了公开接口 `noobanidus.mods.lootr.api.IHasOpeners`，
+它只有一个方法 `Set<UUID> getOpeners()`，返回开过这个容器的所有玩家。
+
+这份数据**在客户端也有值** —— 有人会怀疑"服务端状态客户端拿不到"，但 Lootr 自己的
+`LootrChestBlockRenderer#getMaterial` 就是在客户端读 `getOpeners()` 来决定贴图是金色还是蓝色。
+既然它能在纯客户端画出两种颜色，我们只是把同一份数据拿来给线框上色。
+
+实现上**不引用任何 Lootr 的类型名**，全程用反射：
+
+```java
+if (!ModList.get().isLoaded("lootr")) return State.NOT_LOOTR;   // 没装就直接放弃
+Method m = clazz.getMethod("getOpeners");
+Set<?> openers = (Set<?>) m.invoke(be);
+return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
+```
+
+原因是硬依赖会让**没装 Lootr 的玩家启动即崩溃**（`NoClassDefFoundError`）。
+反射的结果按类缓存，连"这个类没有 getOpeners"也缓存 —— 抛异常的开销很高，
+渲染路径上每帧抛一次会明显掉帧。
 
 ### 指令
 
