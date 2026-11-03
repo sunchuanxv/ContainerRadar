@@ -5,10 +5,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.Container;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 容器扫描器：在一个立方体范围内，找出所有「能装东西的方块」。
@@ -33,19 +36,109 @@ public final class ContainerScanner {
     }
 
     /**
-     * 找出以 center 为中心、radius 为半径的立方体范围内所有「扫描目标」。
+     * 找出以 center 为中心、radius 为半径的立方体范围内所有「扫描目标」（<b>按区块遍历</b>）。
      *
-     * <p>「目标」= 容器 <b>或</b> 玩家加进白名单的任意方块。两者都算，是因为它们对玩家来说
-     * 是一回事：「我想穿墙看到它」。
+     * <p>「目标」= 容器 <b>或</b> 玩家加进白名单的任意方块。
      *
-     * @param level  要扫描的世界。用 Level 而不是 ClientLevel，
-     *               因为服务端和客户端各自持有一份 World 对象，扫描要以「方块实体数据在哪里」为准
-     * @param center 扫描中心，通常是玩家的脚下方块坐标
-     * @param radius 半径（方块数）。实际扫描体积是 (2*radius+1)^3 个坐标，
-     *               radius=32 时约 27 万个位置，所以这是个「重」方法，绝对不能每帧调用
-     * @return 所有目标的坐标。返回的是不可变副本，可以安全存进集合、跨帧持有
+     * <h2>为什么不逐个坐标查</h2>
+     * 旧实现（{@link #findTargetsBruteForce}）要遍历立方体内的每一个方块坐标：
+     * 半径 64 就是 129³ ≈ 214 万个位置，每个位置都查一次哈希表。而一个区块有
+     * 98,304 个方块位置，里面的方块实体通常只有 0~20 个 —— 等于为了找这 20 个，
+     * 把 9.8 万个位置全问了一遍。
+     *
+     * <p>这里换两个思路，效果等价但成本降两三个数量级：
+     * <ul>
+     *   <li><b>容器</b>：直接读区块的方块实体列表（{@code getBlockEntities()}），
+     *       成本只和方块实体数量有关，与半径体积无关</li>
+     *   <li><b>白名单方块</b>：用原版 {@code findBlocks}，它遍历的是区块的 section palette
+     *       （这个区块里实际出现过的方块类型），不碰空气也不碰没出现过的东西</li>
+     * </ul>
+     *
+     * <h2>两个必须注意的坑</h2>
+     * <ol>
+     *   <li>{@code level.getChunk} 对<b>未加载</b>的区块会触发同步加载（从磁盘读+生成），
+     *       主线程会卡几百毫秒。所以先用 {@code hasChunk} 判断，没加载就跳过</li>
+     *   <li>方块实体列表里什么都有（告示牌、熔炉、床、旗帜……），仍然要过容器判断</li>
+     * </ol>
      */
     public static List<BlockPos> findTargets(Level level, BlockPos center, int radius) {
+
+        // 用 Set 收集：同一个坐标可能从两条路径被找到两次
+        // （比如玩家把某个箱子也加进了白名单），Set 自动去重
+        Set<BlockPos> found = new LinkedHashSet<>();
+
+        // 半径范围内的区块坐标范围。>> 4 等价于除以 16（区块边长），位运算更快也更直观
+        int minChunkX = (center.getX() - radius) >> 4;
+        int maxChunkX = (center.getX() + radius) >> 4;
+        int minChunkZ = (center.getZ() - radius) >> 4;
+        int maxChunkZ = (center.getZ() + radius) >> 4;
+
+        // 白名单为空时完全跳过第二条路径（大多数玩家的情况），省掉整轮 findBlocks
+        boolean hasWhitelist = !BlockFilter.isEmpty();
+
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+
+                // 未加载的区块直接跳过。千万不要在这里调 getChunk —— 它会触发同步加载
+                if (!level.hasChunk(chunkX, chunkZ)) {
+                    continue;
+                }
+
+                LevelChunk chunk = level.getChunk(chunkX, chunkZ);
+
+                // 路径一：区块里的方块实体（容器几乎都在这里）
+                for (BlockEntity be : chunk.getBlockEntities().values()) {
+                    BlockPos pos = be.getBlockPos();
+                    if (!inCube(pos, center, radius)) {
+                        continue;
+                    }
+                    if (isContainer(be)) {
+                        // 方块实体的坐标本身就是独立对象，但仍然统一 immutable()，
+                        // 避免以后有人改成别处传进来的共享坐标时踩坑
+                        found.add(pos.immutable());
+                    }
+                }
+
+                // 路径二：白名单方块（矿石、远古残骸这类没有方块实体，只能靠 palette 找）
+                if (hasWhitelist) {
+                    chunk.findBlocks(
+                            state -> BlockFilter.matches(state),
+                            (pos, state) -> {
+                                // findBlocks 回调里的 pos 是复用的可变对象，必须取副本
+                                if (inCube(pos, center, radius)) {
+                                    found.add(pos.immutable());
+                                }
+                            });
+                }
+            }
+        }
+
+        return new ArrayList<>(found);
+    }
+
+    /**
+     * 判断一个坐标是否落在以 center 为中心、radius 为半径的<b>立方体</b>内。
+     *
+     * <p>注意这里刻意用立方体而不是球体 —— 因为旧的逐坐标实现用的是
+     * {@code BlockPos.betweenClosed}，那是个立方体。用球体的话结果会少掉八个角的方块，
+     * 那就不是"重构"而是"改行为"了。想改成球体可以，但应该作为独立的产品决定。
+     */
+    private static boolean inCube(BlockPos pos, BlockPos center, int radius) {
+        return Math.abs(pos.getX() - center.getX()) <= radius
+                && Math.abs(pos.getY() - center.getY()) <= radius
+                && Math.abs(pos.getZ() - center.getZ()) <= radius;
+    }
+
+    /**
+     * 旧实现：逐个坐标遍历。<b>只作为重构后的对照基准保留</b>，正式代码不再调用。
+     *
+     * <p>{@code /cr compare} 指令会同时跑新旧两个实现并比对结果，用来证明重构没有改变行为。
+     * 验证通过后可以整段删除。
+     *
+     * @deprecated 已被 {@link #findTargets} 取代
+     */
+    @Deprecated
+    public static List<BlockPos> findTargetsBruteForce(Level level, BlockPos center, int radius) {
 
         // 用 List 声明，用 ArrayList 实现。调用方只关心「这是一串坐标」，
         // 不需要知道底层是数组还是链表 —— 这叫面向接口编程。
