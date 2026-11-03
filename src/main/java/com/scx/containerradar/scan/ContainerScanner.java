@@ -130,65 +130,6 @@ public final class ContainerScanner {
     }
 
     /**
-     * 旧实现：逐个坐标遍历。<b>只作为重构后的对照基准保留</b>，正式代码不再调用。
-     *
-     * <p>{@code /cr compare} 指令会同时跑新旧两个实现并比对结果，用来证明重构没有改变行为。
-     * 验证通过后可以整段删除。
-     *
-     * @deprecated 已被 {@link #findTargets} 取代
-     */
-    @Deprecated
-    public static List<BlockPos> findTargetsBruteForce(Level level, BlockPos center, int radius) {
-
-        // 用 List 声明，用 ArrayList 实现。调用方只关心「这是一串坐标」，
-        // 不需要知道底层是数组还是链表 —— 这叫面向接口编程。
-        List<BlockPos> result = new ArrayList<>();
-
-        // 算出扫描立方体的两个对角点。
-        // BlockPos.offset(dx, dy, dz) = 向量加法，返回一个「新的」BlockPos，原坐标不变。
-        // BlockPos 是不可变类，所以每次 offset 都会创建新对象，这是它的设计（线程安全、可安全缓存）。
-        BlockPos max = center.offset(radius, radius, radius);
-        BlockPos min = center.offset(-radius, -radius, -radius);
-
-        // betweenClosed(min, max) 返回一个可迭代对象，能遍历立方体内所有整数坐标。
-        // 名字里的 Closed 表示「包含边界」，即 min 和 max 本身也会被扫到（闭区间）。
-        for (BlockPos pos : BlockPos.betweenClosed(min, max)) {
-
-            // 【第一步】拿到这个坐标上的「方块实体」（BlockEntity）。
-            //
-            // 关键概念：不是每个方块都有 BlockEntity。
-            //   石头、泥土、玻璃 —— 只有类型和状态，没有额外数据，getBlockEntity 返回 null
-            //   箱子、熔炉、漏斗 —— 需要记住「里面装了什么 / 烧到哪一步」，所以有 BlockEntity
-            //
-            // 所以「拿不到 BlockEntity」= 这个坐标顶多是个普通方块，可以直接跳过，性能上也是免费的。
-            BlockEntity be = level.getBlockEntity(pos);
-
-            // 【第二步】判断这个坐标算不算「目标」。两个条件满足其一即可：
-            //   1. 它是容器（有物品存储能力，或实现了原版 Container 接口）
-            //   2. 玩家把它加进了自定义白名单（远古残骸、刷怪笼这类不是容器的方块）
-            //
-            // 第二个条件写成 !isEmpty() && matches(...) 是<有意的短路优化>：
-            // 白名单为空时（大多数玩家的情况）连 getBlockState 都不会调用，等于零成本。
-            // 如果改成 matches(...) 内部判空，每个坐标都要先查一次方块状态 —— 半径 16 就是白扫 3.6 万次。
-            boolean whitelisted = !BlockFilter.isEmpty() && BlockFilter.matches(level.getBlockState(pos));
-
-            if (isContainer(be) || whitelisted) {
-
-                // 【第三步】记录这个坐标。
-                //
-                // 关键坑：betweenClosed 为了节省内存，每次迭代都复用同一个 BlockPos 对象，
-                // 只修改它内部的 x/y/z 三个字段。如果直接 add(pos)，
-                // 集合里存的全是同一个引用，循环结束后所有元素都会指向最后那个坐标。
-                //
-                // immutable() 创建一个「不会被复用」的独立副本，这一步不能省。
-                result.add(pos.immutable());
-            }
-        }
-
-        return result;
-    }
-
-    /**
      * 判断一个方块实体是不是「容器」。
      *
      * <p>这里用<b>两个条件</b>，而不是只看能力，原因很实际：

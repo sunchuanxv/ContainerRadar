@@ -27,6 +27,7 @@ import net.minecraftforge.fml.common.Mod;
 import org.lwjgl.opengl.GL11;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -288,6 +289,16 @@ public final class ContainerRenderer {
         }
 
         List<BlockPos> found = ContainerScanner.findTargets(level, playerPos, SCAN_RADIUS);
+
+        // 数量封顶：玩家可能把「草方块」这种到处都是的方块加进白名单，
+        // 半径 64 时会有 16638 个目标 —— 每个框 12 条棱 × 两遍渲染 = 四十万条线段，帧率直接崩。
+        // 超限时按距离排序，只保留最近的若干个：玩家注意到的永远是近处那些。
+        //
+        // 排序每秒只做一次（在扫描里），不是每帧，所以这点开销可以接受。
+        if (found.size() > ContainerRadar.MAX_RENDERED) {
+            found.sort(Comparator.comparingDouble((BlockPos p) -> p.distSqr(playerPos)));
+            found = new ArrayList<>(found.subList(0, ContainerRadar.MAX_RENDERED));
+        }
 
         // 把「坐标列表」升级成「坐标 + 颜色列表」。这一层转换是本次阶段 04 的核心改动：
         // 颜色取决于"是不是白名单方块""我有没有开过这个 Lootr 箱子"，

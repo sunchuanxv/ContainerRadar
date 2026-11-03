@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.scx.containerradar.ContainerRadar;
 import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.scan.ContainerScanner;
 import net.minecraft.ChatFormatting;
@@ -18,7 +19,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraftforge.registries.ForgeRegistries;
 
-import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -84,14 +84,6 @@ public final class ScanCommand {
                         // --- /cr list ---
                         .then(Commands.literal("list")
                                 .executes(ScanCommand::executeList))
-
-                        // --- /cr compare [radius] ---
-                        // 临时调试指令：同时跑新旧两种扫描实现并比对结果。
-                        // 半径上限限制为 64，因为旧实现在 128 时会有上千万次查询，会把客户端卡死几十秒。
-                        .then(Commands.literal("compare")
-                                .executes(ctx -> executeCompare(ctx, DEFAULT_RADIUS))
-                                .then(Commands.argument("radius", IntegerArgumentType.integer(1, 64))
-                                        .executes(ctx -> executeCompare(ctx, IntegerArgumentType.getInteger(ctx, "radius")))))
         );
     }
 
@@ -118,6 +110,15 @@ public final class ScanCommand {
                         + found.size() + " 个目标（容器 + 自定义方块），耗时 " + elapsedMs + " ms")
                         .withStyle(ChatFormatting.AQUA),
                 false);
+
+        // 数量超过渲染上限时给一句提示，否则玩家会疑惑"为什么只看到一部分框"
+        if (found.size() > ContainerRadar.MAX_RENDERED) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal("  注意：超过渲染上限，画面中只会绘制最近的 "
+                                    + ContainerRadar.MAX_RENDERED + " 个")
+                            .withStyle(ChatFormatting.YELLOW),
+                    false);
+        }
 
         int shown = Math.min(found.size(), MAX_LISTED);
         for (int i = 0; i < shown; i++) {
@@ -241,63 +242,5 @@ public final class ScanCommand {
     private static int error(CommandContext<CommandSourceStack> ctx, String message) {
         ctx.getSource().sendFailure(Component.literal("[ContainerRadar] " + message).withStyle(ChatFormatting.RED));
         return 0;
-    }
-
-    // ==================================================================
-    // /cr compare（临时调试指令，重构验证完成后可删）
-    // ==================================================================
-
-    /**
-     * 同时跑「逐坐标」和「按区块」两种实现，比对结果是否完全一致，并打出耗时。
-     *
-     * <p>这是重构的验收工具：只要两边坐标集合相同，就说明换算法没有改变行为，
-     * 那么新实现就是安全的。耗时数字顺便就是重构的收益证明。
-     */
-    private static int executeCompare(CommandContext<CommandSourceStack> ctx, int radius) throws CommandSyntaxException {
-        ServerPlayer player = ctx.getSource().getPlayerOrException();
-        ServerLevel level = ctx.getSource().getLevel();
-        BlockPos center = player.blockPosition();
-
-        long t0 = System.nanoTime();
-        List<BlockPos> brute = ContainerScanner.findTargetsBruteForce(level, center, radius);
-        long bruteMs = (System.nanoTime() - t0) / 1_000_000L;
-
-        long t1 = System.nanoTime();
-        List<BlockPos> fast = ContainerScanner.findTargets(level, center, radius);
-        long fastMs = (System.nanoTime() - t1) / 1_000_000L;
-
-        // 两种实现的遍历顺序不同，所以先按坐标排序再比较。
-        // 用显式泛型的 lambda 而不是方法引用，避免类型推断在这种链式调用里出问题。
-        Comparator<BlockPos> order = Comparator
-                .comparingInt((BlockPos p) -> p.getX())
-                .thenComparingInt(p -> p.getY())
-                .thenComparingInt(p -> p.getZ());
-        brute.sort(order);
-        fast.sort(order);
-
-        boolean same = brute.equals(fast);
-
-        ctx.getSource().sendSuccess(
-                () -> Component.literal("[ContainerRadar] 对照测试 · 半径 " + radius)
-                        .withStyle(ChatFormatting.AQUA), false);
-        ctx.getSource().sendSuccess(
-                () -> Component.literal("  旧实现（逐坐标）：" + brute.size() + " 个，耗时 " + bruteMs + " ms")
-                        .withStyle(ChatFormatting.GRAY), false);
-        ctx.getSource().sendSuccess(
-                () -> Component.literal("  新实现（按区块）：" + fast.size() + " 个，耗时 " + fastMs + " ms")
-                        .withStyle(ChatFormatting.GRAY), false);
-
-        if (same) {
-            // 耗时比只在旧实现不为 0 时有意义
-            String speedup = fastMs > 0 ? "，快约 " + (bruteMs / fastMs) + " 倍" : "";
-            ctx.getSource().sendSuccess(
-                    () -> Component.literal("  结果一致 ✓" + speedup).withStyle(ChatFormatting.GREEN), false);
-        } else {
-            ctx.getSource().sendSuccess(
-                    () -> Component.literal("  结果不一致 ✗ —— 新实现有问题，先别删旧实现")
-                            .withStyle(ChatFormatting.RED), false);
-        }
-
-        return same ? 1 : 0;
     }
 }

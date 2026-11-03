@@ -22,6 +22,21 @@ public class ContainerRadar
 {
     // Define mod id in a common place for everything to reference
     public static final String MODID = "containerradar";
+
+    /**
+     * 单帧最多绘制多少个目标的线框。
+     *
+     * <p>这个上限是必需的，不是保守估计。玩家可以把「草方块」这类到处都是的方块加进白名单，
+     * 半径 64 时会扫到一万六千多个 —— 每个框 12 条棱、渲染两遍，就是四十万条线段，
+     * 帧率会直接崩掉。
+     *
+     * <p>超限时按距离排序，只绘制最近的若干个：玩家最关心的是"眼前这些"，
+     * 远处的少画几个几乎察觉不到，但帧率能稳住。
+     *
+     * <p>放在主类里是为了让客户端（渲染器）和服务端（指令）都能引用，
+     * 而不用让服务端去加载客户端类。
+     */
+    public static final int MAX_RENDERED = 400;
     // Directly reference a slf4j logger
     private static final Logger LOGGER = LogUtils.getLogger();
 
