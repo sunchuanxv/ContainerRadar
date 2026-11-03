@@ -57,8 +57,9 @@ if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) 
 | 自定义方块白名单（任意方块可高亮） | 已完成 |
 | Lootr「已开启 / 未开启」状态差异化着色 | 已完成 |
 | 准星选取加入 / 移出白名单（快捷键） | 已完成 |
+| 配置文件（半径 / 显示开关 / 渲染上限，热生效） | 已完成 |
 | 从 JEI 拖拽添加方块 | 计划中 |
-| 图形化方块选择界面 | 计划中 |
+| 图形化设置界面 | 计划中 |
 
 ## 环境要求
 
@@ -134,14 +135,19 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 ### 指令
 
 ```
-/cr scan            扫描周围 32 格，打印找到的目标
-/cr scan 64         指定半径（1 ~ 128）
+/cr scan            按配置的半径扫描，打印找到的目标
+/cr scan 64         临时指定半径（1 ~ 128），不改配置
 
 /cr add <方块ID>     加入自定义白名单（可省略 minecraft: 前缀）
 /cr add ancient_debris
 /cr add create:zinc_ore
 /cr remove <方块ID>  移出白名单
 /cr list            查看当前白名单
+
+/cr radius 48       设置扫描半径（8 ~ 64），写入配置文件
+/cr toggle containers   开关容器高亮
+/cr toggle whitelist    开关白名单高亮
+/cr reload          重新读取配置文件
 ```
 
 白名单里的方块会显示**橙色**线框，和容器的青色区分开。
@@ -149,12 +155,35 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 输出示例：
 
 ```
-[ContainerRadar] 半径 32 内找到 7 个目标（容器 + 自定义方块），耗时 63 ms
+[ContainerRadar] 半径 32 内找到 7 个目标（容器 + 自定义方块），耗时 3 ms
   (112, 64, -34)  minecraft:chest        [容器]
   (113, 64, -34)  lootr:chest            [容器]
   (108, 40, -30)  minecraft:ancient_debris  [方块]
   ...
 ```
+
+### 配置文件
+
+设置存在 `.minecraft/config/containerradar-settings.json`：
+
+```json
+{
+  "radius": 32,
+  "showContainers": true,
+  "showWhitelist": true,
+  "maxRendered": 400
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `radius` | 扫描半径（格），有效范围 8 ~ 64 |
+| `showContainers` | 是否绘制容器 |
+| `showWhitelist` | 是否绘制白名单方块 |
+| `maxRendered` | 单帧最多绘制多少个框。超出的按距离丢弃最远的，防止"白名单加了草方块"这类情况把帧率拖死 |
+
+手动改完文件后执行 `/cr reload` 即可生效，不必重启游戏。删掉某个字段或整份文件也能正常工作——
+缺失的键会回到默认值，而不是被当成 0。
 
 ### 手动编辑白名单
 
@@ -173,20 +202,29 @@ create:zinc_ore
 
 ```
 src/main/java/com/scx/containerradar/
-├── ContainerRadar.java            模组入口，注册指令监听
+├── ContainerRadar.java            模组入口，注册事件与指令
 ├── command/
 │   └── ScanCommand.java           /cr 指令树：参数解析 + 结果输出
+├── compat/
+│   └── LootrCompat.java           Lootr 状态识别（纯反射，不硬依赖）
+├── config/
+│   └── Settings.java              用户设置（半径 / 开关 / 渲染上限）
 ├── filter/
 │   └── BlockFilter.java           自定义方块白名单 + 配置文件读写
+├── key/
+│   └── KeyBindings.java           准星选取快捷键（K 加入 / L 移出）
 ├── render/
 │   └── ContainerRenderer.java     穿墙线框渲染（双 pass）
 └── scan/
-    └── ContainerScanner.java      目标扫描（纯逻辑，无副作用，指令与渲染共用）
+    └── ContainerScanner.java      目标扫描（按区块遍历，指令与渲染共用）
 ```
 
-三个模块的职责边界：`scan` 只回答"哪里有目标"，`render` 只负责"怎么画"，
-`command` 只负责"怎么和玩家对话"。渲染器和指令都调用同一个 `ContainerScanner`，
-所以"扫描规则"只需要在一处维护。
+几个关键的分层：
+
+- **`scan` 只回答"哪里有目标"**，不碰渲染、不碰界面、不碰按键。指令和渲染器调用的是同一个方法
+- **`config` / `filter` 各自管一个配置文件**，互不影响，玩家删掉其中一个也能正常启动
+- **`compat` 隔离所有对第三方模组的依赖**，且全程用反射，没装 Lootr 的玩家不受任何影响
+- **`render` 每帧只做绘制**：颜色、Lootr 状态这些较贵的判断都在每秒一次的扫描里算好并缓存
 
 ## 踩坑记录
 
