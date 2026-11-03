@@ -164,6 +164,20 @@ public final class ContainerRenderer {
     }
 
     /**
+     * 请求立刻重扫一次。
+     *
+     * <p>平时扫描是节流的（最多 1 秒一次），但玩家刚按快捷键加了一个方块，
+     * 如果还要等一秒才看到框，手感就像"没生效"。所以加了这个入口，
+     * 把"上次扫描时间"和"上次扫描位置"清空 —— 下一帧就会立刻重扫。
+     *
+     * <p>只在客户端主线程调用（快捷键处理就在主线程），所以不需要加锁。
+     */
+    public static void requestRescan() {
+        lastCenter = null;
+        lastScanTick = Long.MIN_VALUE;
+    }
+
+    /**
      * 每帧渲染世界时被调用一次。注意是<b>每帧</b>（60 次/秒），所以这里面的任何耗时操作都会被放大。
      */
     @SubscribeEvent

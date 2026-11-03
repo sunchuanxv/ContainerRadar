@@ -1,0 +1,5 @@
+{
+  "key.categories.containerradar": "容器雷达",
+  "key.containerradar.add_target": "将准星指向的方块加入白名单",
+  "key.containerradar.remove_target": "将准星指向的方块移出白名单"
+}

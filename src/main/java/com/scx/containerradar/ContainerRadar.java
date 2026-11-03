@@ -62,5 +62,17 @@ public class ContainerRadar
             LOGGER.info("HELLO FROM CLIENT SETUP");
             LOGGER.info("MINECRAFT NAME >> {}", Minecraft.getInstance().getUser().getName());
         }
+
+        /**
+         * 注册自定义快捷键。
+         *
+         * <p>必须挂在这里（mod 事件总线 + 客户端），不能在 Forge 总线上注册按键 ——
+         * 挂错位置的话按键不会出现在游戏的"按键绑定"设置里，也永远不会触发。
+         */
+        @SubscribeEvent
+        public static void onRegisterKeyMappings(net.minecraftforge.client.event.RegisterKeyMappingsEvent event)
+        {
+            com.scx.containerradar.key.KeyBindings.register(event);
+        }
     }
 }
