@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.scx.containerradar.ContainerRadar;
+import com.scx.containerradar.compat.LootrCompat;
 import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.scan.ContainerScanner;
 import net.minecraft.client.Minecraft;
@@ -16,6 +17,7 @@ import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
@@ -24,7 +26,9 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import org.lwjgl.opengl.GL11;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 容器高亮渲染器：给扫描到的容器画线框，<b>可以透过墙看到</b>。
@@ -52,11 +56,17 @@ public final class ContainerRenderer {
     /** 玩家移动超过这个距离就立刻重扫。8 格的平方 = 64，用平方比较可以省掉开方运算。 */
     private static final double MOVE_THRESHOLD_SQ = 64.0D;
 
-    /** 容器的颜色：偏青的蓝色（RGBA，取值 0~1）。 */
+    /** 普通容器的颜色：偏青的蓝色（RGBA，取值 0~1）。 */
     private static final float[] COLOR_CONTAINER = {0.25F, 0.85F, 1.00F};
 
-    /** 自定义白名单方块的颜色：橙黄。和容器用不同颜色，一眼能分清"这是箱子"还是"这是我加的方块"。 */
+    /** 自定义白名单方块的颜色：橙黄。和容器区分开，一眼知道"这是我加的方块"。 */
     private static final float[] COLOR_CUSTOM = {1.00F, 0.72F, 0.20F};
+
+    /** Lootr 容器、我还没开过：金色。表示"里面有属于我的战利品，值得跑一趟"。 */
+    private static final float[] COLOR_LOOTR_UNOPENED = {1.00F, 0.85F, 0.15F};
+
+    /** Lootr 容器、我已经开过：灰色。表示"不用再来了"。 */
+    private static final float[] COLOR_LOOTR_OPENED = {0.55F, 0.58F, 0.62F};
 
     /** 第一遍（未遮挡）的透明度：比较实。 */
     private static final float ALPHA_SOLID = 0.90F;
@@ -124,8 +134,25 @@ public final class ContainerRenderer {
                     .setCullState(new RenderStateShard.CullStateShard(false))
                     .createCompositeState(false));
 
-    /** 扫描结果缓存。渲染时直接用这个，不再查方块 —— 这是性能的关键。 */
-    private static List<BlockPos> cached = List.of();
+    /**
+     * 扫描结果缓存。渲染时直接用这个，不再查任何东西 —— 这是性能的关键。
+     *
+     * <p>注意这里存的不是坐标，而是「坐标 + 已经算好的颜色」。
+     * 算颜色需要查方块状态、甚至反射调用 Lootr 的方法，这些都在<b>扫描时算一次</b>
+     * （每秒一次），而不是每帧每个框算一次（每秒几百次）。
+     * 渲染循环里做的事情越少越好，这是渲染优化的第一条原则。
+     */
+    private static List<Target> targets = List.of();
+
+    /**
+     * 一个待绘制的目标。
+     *
+     * <p>{@code record} 是 Java 16 起支持的特性：一行就能定义"只读数据载体"，
+     * 编译器自动生成构造器、getter（pos() / color()）、equals、hashCode、toString。
+     * 比手写一个只有两个字段的类干净得多。
+     */
+    private record Target(BlockPos pos, float[] color) {
+    }
 
     /** 上次扫描时的玩家位置，用于判断"是否移动了足够远"。 */
     private static BlockPos lastCenter = null;
@@ -159,9 +186,9 @@ public final class ContainerRenderer {
         BlockPos playerPos = mc.player.blockPosition();
 
         // 【第二步】更新缓存（如果过期了）
-        updateCache(level, playerPos);
+        updateCache(level, playerPos, mc.player.getUUID());
 
-        if (cached.isEmpty()) {
+        if (targets.isEmpty()) {
             return;
         }
 
@@ -180,14 +207,14 @@ public final class ContainerRenderer {
 
         // 【第四步·第一遍】带深度测试的实色框，只能看到没被遮挡的
         VertexConsumer solid = buffers.getBuffer(RenderType.lines());
-        drawAll(level, poseStack, solid, ALPHA_SOLID);
+        drawAll(poseStack, solid, ALPHA_SOLID);
         // endBatch 才是真正"交给显卡画"的时刻，不调用就什么都不显示。
         // 这里按类型分别提交，是为了让两遍用各自的状态（一个开深度、一个关深度）。
         buffers.endBatch(RenderType.lines());
 
         // 【第五步·第二遍】关掉深度测试的淡色框，能透过墙看到
         VertexConsumer ghost = buffers.getBuffer(SEE_THROUGH_LINES);
-        drawAll(level, poseStack, ghost, ALPHA_GHOST);
+        drawAll(poseStack, ghost, ALPHA_GHOST);
         buffers.endBatch(SEE_THROUGH_LINES);
 
         // 和上面的 pushPose 配对。不 pop 的话，这个 translate 会残留，
@@ -198,22 +225,21 @@ public final class ContainerRenderer {
     /**
      * 把缓存里所有目标都画一遍框。
      *
-     * @param level     当前世界，用来判断每个坐标是"容器"还是"白名单方块"（决定颜色）
+     * <p>注意这里<b>没有任何查询</b>：不算颜色、不查方块、不碰反射，只是取出预存好的
+     * 坐标和颜色往缓冲区里塞顶点。这是渲染代码该有的样子 —— 每帧执行的东西必须足够"笨"。
+     *
      * @param poseStack 已经做过摄像机偏移的坐标变换栈
      * @param consumer  顶点接收器（不同渲染类型对应不同实例）
      * @param alpha     透明度
      */
-    private static void drawAll(Level level, PoseStack poseStack, VertexConsumer consumer, float alpha) {
-        for (BlockPos pos : cached) {
+    private static void drawAll(PoseStack poseStack, VertexConsumer consumer, float alpha) {
+        for (Target target : targets) {
             // AABB = 轴对齐包围盒，就是一个方块大小的立方体。
             // inflate(0.002) 把它向外扩 2 毫米 —— 不加的话，框的坐标和方块表面完全重合，
             // 会互相"打架"（z-fighting），表现为线条闪烁、断裂。
-            AABB box = new AABB(pos).inflate(0.002D);
+            AABB box = new AABB(target.pos()).inflate(0.002D);
 
-            // 判断颜色。这个查询每帧每个框一次，但框的数量只有几十个，开销可以忽略。
-            // 注意 != isEmpty() 的短路：白名单为空时根本不查方块状态
-            boolean custom = !BlockFilter.isEmpty() && BlockFilter.matches(level.getBlockState(pos));
-            float[] color = custom ? COLOR_CUSTOM : COLOR_CONTAINER;
+            float[] color = target.color();
 
             // LevelRenderer.renderLineBox 是原版现成的工具方法：给一个立方体，
             // 它会把 12 条棱都画出来。自己算 12 条线的顶点纯属重复劳动。
@@ -222,7 +248,9 @@ public final class ContainerRenderer {
     }
 
     /**
-     * 按需重扫。只在两种情况下真的去扫：
+     * 按需重扫，并<b>一次性算好</b>每个目标的颜色。
+     *
+     * <p>只在两种情况下真的去扫：
      * <ul>
      *   <li>距上次扫描超过 {@link #RESCAN_INTERVAL_TICKS} 个 tick（默认 1 秒）</li>
      *   <li>玩家移动超过 8 格</li>
@@ -231,8 +259,10 @@ public final class ContainerRenderer {
      * <p>为什么必须节流：扫描耗时和半径的<b>立方</b>成正比。
      * 半径 16 是 33³ ≈ 3.6 万个坐标，半径 32 就是 65³ ≈ 27 万个。
      * 如果每帧都扫，60 帧/秒 × 27 万 = 每秒 1600 万次查询，帧率立刻完蛋。
+     *
+     * @param playerId 当前玩家 UUID，用来问 Lootr「这个箱子我开过没有」
      */
-    private static void updateCache(Level level, BlockPos playerPos) {
+    private static void updateCache(Level level, BlockPos playerPos, UUID playerId) {
         long tick = level.getGameTime();
 
         boolean needScan = lastCenter == null                          // 第一次
@@ -243,11 +273,42 @@ public final class ContainerRenderer {
             return;
         }
 
-        cached = ContainerScanner.findTargets(level, playerPos, SCAN_RADIUS);
+        List<BlockPos> found = ContainerScanner.findTargets(level, playerPos, SCAN_RADIUS);
+
+        // 把「坐标列表」升级成「坐标 + 颜色列表」。这一层转换是本次阶段 04 的核心改动：
+        // 颜色取决于"是不是白名单方块""我有没有开过这个 Lootr 箱子"，
+        // 这些判断比较贵（要查方块状态、要反射），所以放在每秒一次的扫描里做，
+        // 而不是放进每帧的绘制循环。
+        List<Target> built = new ArrayList<>(found.size());
+        for (BlockPos pos : found) {
+            built.add(new Target(pos, resolveColor(level, pos, playerId)));
+        }
+        targets = built;
 
         // 这里必须 immutable()：playerPos 是从玩家身上取的，后续可能被复用/修改，
         // 直接引用会让"上次扫描位置"跟着变，导致移动判断永远失效。
         lastCenter = playerPos.immutable();
         lastScanTick = tick;
+    }
+
+    /**
+     * 决定一个目标的线框颜色。
+     *
+     * <p>优先级从上到下：白名单方块 → Lootr 已开 → Lootr 未开 → 普通容器。
+     * 先判白名单是因为"玩家明确点名要高亮的方块"应该优先展示玩家自己的意图。
+     */
+    private static float[] resolveColor(Level level, BlockPos pos, UUID playerId) {
+        // 白名单方块：橙色（白名单为空时这行零成本，直接跳过）
+        if (!BlockFilter.isEmpty() && BlockFilter.matches(level.getBlockState(pos))) {
+            return COLOR_CUSTOM;
+        }
+
+        // Lootr 状态：金色（没开过）/ 灰色（开过了）/ 与我们无关
+        BlockEntity be = level.getBlockEntity(pos);
+        return switch (LootrCompat.stateOf(be, playerId)) {
+            case OPENED -> COLOR_LOOTR_OPENED;
+            case UNOPENED -> COLOR_LOOTR_UNOPENED;
+            case NOT_LOOTR -> COLOR_CONTAINER;
+        };
     }
 }
