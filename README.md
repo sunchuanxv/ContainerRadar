@@ -3,7 +3,8 @@
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1-3C8527)
 ![Forge](https://img.shields.io/badge/Forge-47.4.28-DFA86A)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Status](https://img.shields.io/badge/status-WIP-yellow)
+![Build](https://github.com/sunchuanxv/ContainerRadar/actions/workflows/build.yml/badge.svg)
+![Release](https://img.shields.io/github/v/release/sunchuanxv/ContainerRadar)
 
 穿墙高亮附近的容器 —— 按**能力**识别，而不是按方块 ID。
 
@@ -11,7 +12,17 @@
 > detecting the Forge `IItemHandler` capability, so containers from **any** mod are
 > recognized automatically — no per-mod compatibility code.
 
-**当前状态**：开发中。容器扫描逻辑与调试指令已完成，高亮渲染尚未实现（见 Roadmap）。
+![四种颜色的高亮效果](docs/screenshot-colors.png)
+
+同一画面里的三种状态：普通容器（青色）、Lootr 已开启（灰色）、Lootr 未开启（金色）。
+再加白名单里的自定义方块会显示橙色。
+
+![透过墙看到箱子的轮廓](docs/screenshot-through-wall.png)
+
+墙后面的箱子照样能看到轮廓。没被遮挡的框较实，被挡住的会淡一些 —— 位置和距离都能判断。
+
+**当前状态**：核心功能可用。容器识别、穿墙渲染、任意方块白名单、准星选取快捷键、
+Lootr 状态着色均已完成；图形化配置界面与 JEI 拖拽仍在计划中（见 Roadmap）。
 
 ## 为什么还要再造一个轮子？
 
