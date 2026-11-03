@@ -5,7 +5,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
-import com.scx.containerradar.ContainerRadar;
+import com.scx.containerradar.config.Settings;
 import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.scan.ContainerScanner;
 import net.minecraft.ChatFormatting;
@@ -40,9 +40,6 @@ import java.util.List;
  */
 public final class ScanCommand {
 
-    /** 不带参数时使用的默认半径。 */
-    private static final int DEFAULT_RADIUS = 32;
-
     /** 聊天栏最多列出多少个坐标，避免一次刷屏几百行。 */
     private static final int MAX_LISTED = 10;
 
@@ -64,7 +61,7 @@ public final class ScanCommand {
 
                         // --- /cr scan [radius] ---
                         .then(Commands.literal("scan")
-                                .executes(ctx -> executeScan(ctx, DEFAULT_RADIUS))
+                                .executes(ctx -> executeScan(ctx, Settings.radius()))
                                 .then(Commands.argument("radius", IntegerArgumentType.integer(1, 128))
                                         .executes(ctx -> executeScan(ctx, IntegerArgumentType.getInteger(ctx, "radius")))))
 
@@ -84,6 +81,23 @@ public final class ScanCommand {
                         // --- /cr list ---
                         .then(Commands.literal("list")
                                 .executes(ScanCommand::executeList))
+
+                        // --- /cr radius <半径> ---
+                        .then(Commands.literal("radius")
+                                .then(Commands.argument("radius",
+                                                IntegerArgumentType.integer(Settings.MIN_RADIUS, Settings.MAX_RADIUS))
+                                        .executes(ctx -> executeRadius(ctx, IntegerArgumentType.getInteger(ctx, "radius")))))
+
+                        // --- /cr toggle containers|whitelist ---
+                        .then(Commands.literal("toggle")
+                                .then(Commands.literal("containers")
+                                        .executes(ctx -> executeToggle(ctx, true)))
+                                .then(Commands.literal("whitelist")
+                                        .executes(ctx -> executeToggle(ctx, false))))
+
+                        // --- /cr reload ---
+                        .then(Commands.literal("reload")
+                                .executes(ScanCommand::executeReload))
         );
     }
 
@@ -112,10 +126,11 @@ public final class ScanCommand {
                 false);
 
         // 数量超过渲染上限时给一句提示，否则玩家会疑惑"为什么只看到一部分框"
-        if (found.size() > ContainerRadar.MAX_RENDERED) {
+        int maxRendered = Settings.maxRendered();
+        if (found.size() > maxRendered) {
             ctx.getSource().sendSuccess(
                     () -> Component.literal("  注意：超过渲染上限，画面中只会绘制最近的 "
-                                    + ContainerRadar.MAX_RENDERED + " 个")
+                                    + maxRendered + " 个")
                             .withStyle(ChatFormatting.YELLOW),
                     false);
         }
@@ -242,5 +257,59 @@ public final class ScanCommand {
     private static int error(CommandContext<CommandSourceStack> ctx, String message) {
         ctx.getSource().sendFailure(Component.literal("[ContainerRadar] " + message).withStyle(ChatFormatting.RED));
         return 0;
+    }
+
+    // ==================================================================
+    // /cr radius | toggle | reload
+    // ==================================================================
+
+    /**
+     * 修改扫描半径并立刻写回配置文件。
+     *
+     * <p>注意这里<b>没有</b>直接通知渲染器重扫：指令跑在服务端，而渲染器是客户端类，
+     * 服务端代码引用客户端类在专用服务器上会崩。渲染器本来就有 1 秒一次的节流重扫，
+     * 所以最多 1 秒后新设置自然生效，这个延迟可以接受。
+     */
+    private static int executeRadius(CommandContext<CommandSourceStack> ctx, int radius) {
+        int applied = Settings.setRadius(radius);
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("扫描半径已设为 " + applied + " 格").withStyle(ChatFormatting.GREEN),
+                false);
+        return applied;
+    }
+
+    /**
+     * 切换某个开关。
+     *
+     * @param containers true = 容器开关，false = 白名单开关
+     */
+    private static int executeToggle(CommandContext<CommandSourceStack> ctx, boolean containers) {
+        boolean next = !(containers ? Settings.showContainers() : Settings.showWhitelist());
+        if (containers) {
+            Settings.setShowContainers(next);
+        } else {
+            Settings.setShowWhitelist(next);
+        }
+
+        String name = containers ? "容器高亮" : "白名单高亮";
+        ctx.getSource().sendSuccess(
+                () -> Component.literal(name + "：" + (next ? "已开启" : "已关闭"))
+                        .withStyle(next ? ChatFormatting.GREEN : ChatFormatting.YELLOW),
+                false);
+        return next ? 1 : 0;
+    }
+
+    /** 重新从磁盘读取配置。玩家手动编辑过 JSON 之后用它生效，不必重启游戏。 */
+    private static int executeReload(CommandContext<CommandSourceStack> ctx) {
+        Settings.reload();
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("[ContainerRadar] 已重新读取配置 · 半径 "
+                                + Settings.radius()
+                                + "，容器 " + (Settings.showContainers() ? "开" : "关")
+                                + "，白名单 " + (Settings.showWhitelist() ? "开" : "关")
+                                + "，渲染上限 " + Settings.maxRendered())
+                        .withStyle(ChatFormatting.AQUA),
+                false);
+        return 1;
     }
 }

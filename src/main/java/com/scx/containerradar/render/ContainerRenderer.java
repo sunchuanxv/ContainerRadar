@@ -7,6 +7,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.scx.containerradar.ContainerRadar;
 import com.scx.containerradar.compat.LootrCompat;
+import com.scx.containerradar.config.Settings;
 import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.scan.ContainerScanner;
 import net.minecraft.client.Minecraft;
@@ -48,10 +49,12 @@ import java.util.UUID;
 @Mod.EventBusSubscriber(modid = ContainerRadar.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE, value = Dist.CLIENT)
 public final class ContainerRenderer {
 
-    /** 扫描半径（格）。调大能看得更远，但扫描耗时是半径的立方 —— 见 updateCache 的注释。 */
-    private static final int SCAN_RADIUS = 16;
-
-    /** 多久重扫一次（单位：tick，20 tick = 1 秒）。 */
+    /**
+     * 多久重扫一次（单位：tick，20 tick = 1 秒）。
+     *
+     * <p>扫描半径不在这里写死，而是从 {@code Settings} 读：玩家可以在配置文件里改成 8~64。
+     * 扫描改成按区块遍历之后，32 和 64 的成本差别很小。
+     */
     private static final int RESCAN_INTERVAL_TICKS = 20;
 
     /** 玩家移动超过这个距离就立刻重扫。8 格的平方 = 64，用平方比较可以省掉开方运算。 */
@@ -288,16 +291,17 @@ public final class ContainerRenderer {
             return;
         }
 
-        List<BlockPos> found = ContainerScanner.findTargets(level, playerPos, SCAN_RADIUS);
+        List<BlockPos> found = ContainerScanner.findTargets(level, playerPos, Settings.radius());
 
         // 数量封顶：玩家可能把「草方块」这种到处都是的方块加进白名单，
-        // 半径 64 时会有 16638 个目标 —— 每个框 12 条棱 × 两遍渲染 = 四十万条线段，帧率直接崩。
+        // 半径 64 时会有一万多个目标 —— 每个框 12 条棱 × 两遍渲染 = 几十万条线段，帧率直接崩。
         // 超限时按距离排序，只保留最近的若干个：玩家注意到的永远是近处那些。
         //
         // 排序每秒只做一次（在扫描里），不是每帧，所以这点开销可以接受。
-        if (found.size() > ContainerRadar.MAX_RENDERED) {
+        int maxRendered = Settings.maxRendered();
+        if (found.size() > maxRendered) {
             found.sort(Comparator.comparingDouble((BlockPos p) -> p.distSqr(playerPos)));
-            found = new ArrayList<>(found.subList(0, ContainerRadar.MAX_RENDERED));
+            found = new ArrayList<>(found.subList(0, maxRendered));
         }
 
         // 把「坐标列表」升级成「坐标 + 颜色列表」。这一层转换是本次阶段 04 的核心改动：

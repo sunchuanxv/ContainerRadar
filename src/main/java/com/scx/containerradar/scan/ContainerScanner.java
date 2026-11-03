@@ -1,5 +1,6 @@
 package com.scx.containerradar.scan;
 
+import com.scx.containerradar.config.Settings;
 import com.scx.containerradar.filter.BlockFilter;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.Container;
@@ -62,6 +63,20 @@ public final class ContainerScanner {
      * </ol>
      */
     public static List<BlockPos> findTargets(Level level, BlockPos center, int radius) {
+        // 便捷重载：直接用玩家在设置里选的开关。
+        // 真正的实现在下面那个带显式参数的重载里 —— 调用方（指令、渲染器）不用每次传一堆 boolean，
+        // 而需要单独控制开关的地方（例如调试）仍然可以走带参数的那个。
+        return findTargets(level, center, radius, Settings.showContainers(), Settings.showWhitelist());
+    }
+
+    /**
+     * 带显式开关的版本。
+     *
+     * @param withContainers 是否收集容器
+     * @param withWhitelist  是否收集白名单方块
+     */
+    public static List<BlockPos> findTargets(Level level, BlockPos center, int radius,
+                                             boolean withContainers, boolean withWhitelist) {
 
         // 用 Set 收集：同一个坐标可能从两条路径被找到两次
         // （比如玩家把某个箱子也加进了白名单），Set 自动去重
@@ -73,8 +88,8 @@ public final class ContainerScanner {
         int minChunkZ = (center.getZ() - radius) >> 4;
         int maxChunkZ = (center.getZ() + radius) >> 4;
 
-        // 白名单为空时完全跳过第二条路径（大多数玩家的情况），省掉整轮 findBlocks
-        boolean hasWhitelist = !BlockFilter.isEmpty();
+        // 两个条件都要满足才去扫白名单：玩家关了开关，或者本来就没加过东西，都可以整轮跳过
+        boolean scanWhitelist = withWhitelist && !BlockFilter.isEmpty();
 
         for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
             for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
@@ -87,20 +102,22 @@ public final class ContainerScanner {
                 LevelChunk chunk = level.getChunk(chunkX, chunkZ);
 
                 // 路径一：区块里的方块实体（容器几乎都在这里）
-                for (BlockEntity be : chunk.getBlockEntities().values()) {
-                    BlockPos pos = be.getBlockPos();
-                    if (!inCube(pos, center, radius)) {
-                        continue;
-                    }
-                    if (isContainer(be)) {
-                        // 方块实体的坐标本身就是独立对象，但仍然统一 immutable()，
-                        // 避免以后有人改成别处传进来的共享坐标时踩坑
-                        found.add(pos.immutable());
+                if (withContainers) {
+                    for (BlockEntity be : chunk.getBlockEntities().values()) {
+                        BlockPos pos = be.getBlockPos();
+                        if (!inCube(pos, center, radius)) {
+                            continue;
+                        }
+                        if (isContainer(be)) {
+                            // 方块实体的坐标本身就是独立对象，但仍然统一 immutable()，
+                            // 避免以后有人改成别处传进来的共享坐标时踩坑
+                            found.add(pos.immutable());
+                        }
                     }
                 }
 
                 // 路径二：白名单方块（矿石、远古残骸这类没有方块实体，只能靠 palette 找）
-                if (hasWhitelist) {
+                if (scanWhitelist) {
                     chunk.findBlocks(
                             state -> BlockFilter.matches(state),
                             (pos, state) -> {
