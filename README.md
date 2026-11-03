@@ -45,7 +45,8 @@ if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) 
 | 穿墙线框渲染（双 pass：近处实色 / 墙后淡色） | 已完成 |
 | 自定义方块白名单（任意方块可高亮） | 已完成 |
 | Lootr「已开启 / 未开启」状态差异化着色 | 已完成 |
-| 准星选取 / 从 JEI 拖拽添加方块 | 计划中 |
+| 准星选取加入 / 移出白名单（快捷键） | 已完成 |
+| 从 JEI 拖拽添加方块 | 计划中 |
 | 图形化方块选择界面 | 计划中 |
 
 ## 环境要求
@@ -106,6 +107,18 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 原因是硬依赖会让**没装 Lootr 的玩家启动即崩溃**（`NoClassDefFoundError`）。
 反射的结果按类缓存，连"这个类没有 getOpeners"也缓存 —— 抛异常的开销很高，
 渲染路径上每帧抛一次会明显掉帧。
+
+### 快捷键
+
+| 默认按键 | 作用 |
+| --- | --- |
+| `K` | 把准星指向的方块加入白名单 |
+| `L` | 把准星指向的方块移出白名单 |
+
+两个键都可以在「选项 → 控制 → 按键绑定 → 容器雷达」里改。属于游戏中生效（`IN_GAME`），
+打开背包时按不会误触发。
+
+比敲指令方便得多——`minecraft:ancient_debris` 这种 ID 不用再手打了。
 
 ### 指令
 
