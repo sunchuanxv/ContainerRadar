@@ -1,19 +1,15 @@
 package com.scx.containerradar;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.client.Minecraft;
+import com.scx.containerradar.command.ScanCommand;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
-import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.slf4j.Logger;
-import com.scx.containerradar.command.ScanCommand;
-import net.minecraftforge.event.RegisterCommandsEvent;
 
 
 // The value here should match an entry in the META-INF/mods.toml file
@@ -43,27 +39,15 @@ public class ContainerRadar
 
     public ContainerRadar(FMLJavaModLoadingContext context)
     {
-        IEventBus modEventBus = context.getModEventBus();
-
-        // Register the commonSetup method for modloading
-        modEventBus.addListener(this::commonSetup);
-
-        // Register ourselves for server and other game events we are interested in
+        // 把自己注册到 Forge 事件总线：主类里所有 @SubscribeEvent 方法（比如 onRegisterCommands）
+        // 都靠这一句才能收到事件。mod 事件总线（context.getModEventBus()）目前还没用到 ——
+        // 它用于注册方块/物品/按键这类"加载期"事件，等真需要时再加。
         MinecraftForge.EVENT_BUS.register(this);
-
-        // Register our mod's ForgeConfigSpec so that Forge can create and load the config file for us
-        context.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
     }
 
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         ScanCommand.register(event.getDispatcher());
-    }
-
-
-    private void commonSetup(final FMLCommonSetupEvent event)
-    {
-        Config.items.forEach((item) -> LOGGER.info("ITEM >> {}", item.toString()));
     }
 
     // You can use EventBusSubscriber to automatically register all static methods in the class annotated with @SubscribeEvent
@@ -73,9 +57,8 @@ public class ContainerRadar
         @SubscribeEvent
         public static void onClientSetup(FMLClientSetupEvent event)
         {
-            // Some client setup code
-            LOGGER.info("HELLO FROM CLIENT SETUP");
-            LOGGER.info("MINECRAFT NAME >> {}", Minecraft.getInstance().getUser().getName());
+            // 留一行启动日志：出问题时能在 latest.log 里确认模组确实加载了
+            LOGGER.info("[ContainerRadar] 客户端初始化完成");
         }
 
         /**
