@@ -21,6 +21,7 @@ import java.nio.file.Path;
  *
  * <pre>
  * {
+ *   "enabled": true,
  *   "radius": 32,
  *   "showContainers": true,
  *   "showWhitelist": true,
@@ -59,6 +60,7 @@ public final class Settings {
     private static final int MAX_MAX_RENDERED = 5000;
 
     // ---- 内存里的当前值（默认值就是首次启动时写入文件的内容）----
+    private static boolean enabled = true;
     private static int radius = 32;
     private static boolean showContainers = true;
     private static boolean showWhitelist = true;
@@ -77,6 +79,7 @@ public final class Settings {
      * 这样玩家删掉某一行不会把设置搞坏。
      */
     private static final class Data {
+        Boolean enabled;
         Integer radius;
         Boolean showContainers;
         Boolean showWhitelist;
@@ -86,6 +89,12 @@ public final class Settings {
     // ==================================================================
     // 读取
     // ==================================================================
+
+    /** 总开关：关闭时连扫描都不做，开销为零。 */
+    public static synchronized boolean enabled() {
+        ensureLoaded();
+        return enabled;
+    }
 
     /** 扫描半径（格），保证在合法范围内。 */
     public static synchronized int radius() {
@@ -114,6 +123,21 @@ public final class Settings {
     // ==================================================================
     // 修改（改完立刻写回文件）
     // ==================================================================
+
+    /** 设置总开关。 */
+    public static synchronized void setEnabled(boolean value) {
+        ensureLoaded();
+        enabled = value;
+        save();
+    }
+
+    /** 翻转总开关，返回翻转后的值。 */
+    public static synchronized boolean toggleEnabled() {
+        ensureLoaded();
+        enabled = !enabled;
+        save();
+        return enabled;
+    }
 
     /** 设置半径，并夹到合法范围内。返回最终生效的值。 */
     public static synchronized int setRadius(int value) {
@@ -176,6 +200,9 @@ public final class Settings {
             Data data = GSON.fromJson(reader, Data.class);
             if (data != null) {
                 // 逐个判断是否为 null：文件里缺失的键保留默认值，而不是被覆盖成 0
+                if (data.enabled != null) {
+                    enabled = data.enabled;
+                }
                 if (data.radius != null) {
                     radius = clamp(data.radius, MIN_RADIUS, MAX_RADIUS);
                 }
@@ -199,6 +226,7 @@ public final class Settings {
 
     private static void save() {
         Data data = new Data();
+        data.enabled = enabled;
         data.radius = radius;
         data.showContainers = showContainers;
         data.showWhitelist = showWhitelist;

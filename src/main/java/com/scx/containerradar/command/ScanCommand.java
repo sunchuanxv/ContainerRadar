@@ -88,8 +88,10 @@ public final class ScanCommand {
                                                 IntegerArgumentType.integer(Settings.MIN_RADIUS, Settings.MAX_RADIUS))
                                         .executes(ctx -> executeRadius(ctx, IntegerArgumentType.getInteger(ctx, "radius")))))
 
-                        // --- /cr toggle containers|whitelist ---
+                        // --- /cr toggle [containers|whitelist] ---
+                        // 不带参数 = 翻转总开关（全部显示 / 全部不显示）
                         .then(Commands.literal("toggle")
+                                .executes(ScanCommand::executeToggleAll)
                                 .then(Commands.literal("containers")
                                         .executes(ctx -> executeToggle(ctx, true)))
                                 .then(Commands.literal("whitelist")
@@ -279,6 +281,21 @@ public final class ScanCommand {
     }
 
     /**
+     * 翻转总开关（等于游戏内按快捷键）。
+     *
+     * <p>和 {@link #executeToggle} 的区别：那个管"显示容器"或"显示白名单"其中一个，
+     * 这个管全部 —— 关掉之后扫描都不做，开销为零。
+     */
+    private static int executeToggleAll(CommandContext<CommandSourceStack> ctx) {
+        boolean nowEnabled = Settings.toggleEnabled();
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("容器雷达：" + (nowEnabled ? "已开启" : "已关闭"))
+                        .withStyle(nowEnabled ? ChatFormatting.GREEN : ChatFormatting.YELLOW),
+                false);
+        return nowEnabled ? 1 : 0;
+    }
+
+    /**
      * 切换某个开关。
      *
      * @param containers true = 容器开关，false = 白名单开关
@@ -303,8 +320,9 @@ public final class ScanCommand {
     private static int executeReload(CommandContext<CommandSourceStack> ctx) {
         Settings.reload();
         ctx.getSource().sendSuccess(
-                () -> Component.literal("[ContainerRadar] 已重新读取配置 · 半径 "
-                                + Settings.radius()
+                () -> Component.literal("[ContainerRadar] 已重新读取配置 · 总开关 "
+                                + (Settings.enabled() ? "开" : "关")
+                                + "，半径 " + Settings.radius()
                                 + "，容器 " + (Settings.showContainers() ? "开" : "关")
                                 + "，白名单 " + (Settings.showWhitelist() ? "开" : "关")
                                 + "，渲染上限 " + Settings.maxRendered())

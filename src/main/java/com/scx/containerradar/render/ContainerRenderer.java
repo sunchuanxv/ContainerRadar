@@ -201,6 +201,12 @@ public final class ContainerRenderer {
             return;
         }
 
+        // 总开关放在最前面：关掉时连扫描都不做，开销真的为零。
+        // 这也是"临时不想看"的常用场景 —— 按一下快捷键全部消失，不用改配置。
+        if (!Settings.enabled()) {
+            return;
+        }
+
         BlockPos playerPos = mc.player.blockPosition();
 
         // 【第二步】更新缓存（如果过期了）

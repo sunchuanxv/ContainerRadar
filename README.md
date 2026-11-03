@@ -125,11 +125,13 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 
 | 默认按键 | 作用 |
 | --- | --- |
+| `J` | 开启 / 关闭全部高亮（总开关，关掉后连扫描都不做） |
 | `K` | 把准星指向的方块加入白名单 |
 | `L` | 把准星指向的方块移出白名单 |
 
-两个键都可以在「选项 → 控制 → 按键绑定 → 容器雷达」里改。属于游戏中生效（`IN_GAME`），
-打开背包时按不会误触发。
+三个键都可以在「选项 → 控制 → 按键绑定 → 容器雷达」里改。属于游戏中生效（`IN_GAME`），
+打开背包时按不会误触发。如果整合包里这些键已被占用，Minecraft 会显示成别的键
+（例如小键盘）—— 进去点一下重新绑即可。
 
 比敲指令方便得多——`minecraft:ancient_debris` 这种 ID 不用再手打了。
 
@@ -146,8 +148,9 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 /cr list            查看当前白名单
 
 /cr radius 48       设置扫描半径（8 ~ 64），写入配置文件
-/cr toggle containers   开关容器高亮
-/cr toggle whitelist    开关白名单高亮
+/cr toggle          开启 / 关闭全部高亮（总开关）
+/cr toggle containers   单独开关容器高亮
+/cr toggle whitelist    单独开关白名单高亮
 /cr reload          重新读取配置文件
 ```
 
@@ -169,6 +172,7 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 
 ```json
 {
+  "enabled": true,
   "radius": 32,
   "showContainers": true,
   "showWhitelist": true,
@@ -178,6 +182,7 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 
 | 字段 | 说明 |
 | --- | --- |
+| `enabled` | 总开关。`false` 时完全不扫描、不渲染，开销为零 |
 | `radius` | 扫描半径（格），有效范围 8 ~ 64 |
 | `showContainers` | 是否绘制容器 |
 | `showWhitelist` | 是否绘制白名单方块 |

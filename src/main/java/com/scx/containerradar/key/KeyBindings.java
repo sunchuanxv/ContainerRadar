@@ -2,6 +2,7 @@ package com.scx.containerradar.key;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.scx.containerradar.ContainerRadar;
+import com.scx.containerradar.config.Settings;
 import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.render.ContainerRenderer;
 import net.minecraft.ChatFormatting;
@@ -73,6 +74,14 @@ public final class KeyBindings {
             GLFW.GLFW_KEY_L,
             CATEGORY);
 
+    /** 总开关，默认 J：一下全部显示 / 全部消失。 */
+    private static final KeyMapping TOGGLE = new KeyMapping(
+            "key.containerradar.toggle",
+            KeyConflictContext.IN_GAME,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_J,
+            CATEGORY);
+
     private KeyBindings() {
     }
 
@@ -84,6 +93,7 @@ public final class KeyBindings {
     public static void register(RegisterKeyMappingsEvent event) {
         event.register(ADD_TARGET);
         event.register(REMOVE_TARGET);
+        event.register(TOGGLE);
     }
 
     /**
@@ -102,19 +112,33 @@ public final class KeyBindings {
         // 用 while 是为了把队列清空 —— 万一玩家一 tick 内按了两下，也不会留到下一 tick 才响应。
         boolean wantAdd = false;
         boolean wantRemove = false;
+        boolean wantToggle = false;
         while (ADD_TARGET.consumeClick()) {
             wantAdd = true;
         }
         while (REMOVE_TARGET.consumeClick()) {
             wantRemove = true;
         }
+        while (TOGGLE.consumeClick()) {
+            wantToggle = true;
+        }
 
-        if (!wantAdd && !wantRemove) {
+        if (!wantAdd && !wantRemove && !wantToggle) {
             return;
         }
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) {
+            return;
+        }
+
+        // 总开关优先处理，处理完直接结束：同一次按键不该既切换开关又去加白名单
+        if (wantToggle) {
+            boolean nowEnabled = Settings.toggleEnabled();
+            // 立刻刷新画面，让"关掉"当帧就生效，不用等 1 秒的扫描节流
+            ContainerRenderer.requestRescan();
+            actionBar(mc, Component.literal("容器雷达：" + (nowEnabled ? "已开启" : "已关闭"))
+                    .withStyle(nowEnabled ? ChatFormatting.GREEN : ChatFormatting.GRAY));
             return;
         }
 
