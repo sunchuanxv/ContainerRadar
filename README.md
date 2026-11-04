@@ -59,9 +59,8 @@ if (be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent()) 
 | Lootr「已开启 / 未开启」状态差异化着色 | 已完成 |
 | 准星选取加入 / 移出白名单（快捷键） | 已完成 |
 | 配置文件（半径 / 显示开关 / 渲染上限，热生效） | 已完成 |
-| 图形化设置界面（开关 + 半径滑块，按 `O` 打开） | 已完成 |
+| 图形化设置界面（开关 + 半径滑块 + 搜索 + 白名单管理，按 `O` 打开） | 已完成 |
 | 从 JEI 拖拽添加方块 | 计划中 |
-| 设置界面内的白名单列表（带滚动与删除） | 计划中 |
 
 ## 环境要求
 
@@ -144,10 +143,11 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 /cr scan            按配置的半径扫描，打印找到的目标
 /cr scan 64         临时指定半径（1 ~ 128），不改配置
 
-/cr add <方块ID>     加入自定义白名单（可省略 minecraft: 前缀）
+/cr add <方块ID>     加入自定义白名单（可省略 minecraft: 前缀，支持 Tab 补全）
 /cr add ancient_debris
 /cr add create:zinc_ore
 /cr remove <方块ID>  移出白名单
+/cr search <关键词>  按 ID 或名称搜索方块（支持中文，如 /cr search 钻石）
 /cr list            查看当前白名单
 
 /cr radius 48       设置扫描半径（8 ~ 64），写入配置文件
@@ -194,6 +194,19 @@ return openers.contains(myUuid) ? State.OPENED : State.UNOPENED;
 手动改完文件后执行 `/cr reload` 即可生效，不必重启游戏。删掉某个字段或整份文件也能正常工作——
 缺失的键会回到默认值，而不是被当成 0。
 
+### 设置界面
+
+按 `O` 打开。上面是总开关、两个分类开关和扫描半径滑块，下面左右两个列表：
+
+- **左：搜索结果** —— 输入关键词实时筛选，点一下加入白名单（已加入的显示为灰色）
+- **右：白名单** —— 点一下移除
+
+搜索**同时匹配方块 ID 和本地化名称**，所以输 `钻石` 和 `diamond` 都能找到东西。
+中文搜索依赖游戏语言：英文环境下名称是英文，按 ID 搜仍然有效。
+
+索引在首次打开界面时构建（约 0.3 秒），之后每次搜索都是亚毫秒级。
+没做拼音搜索 —— 那需要维护一张全量汉字的拼音表，不值得。
+
 ### 手动编辑白名单
 
 白名单存在 `.minecraft/config/containerradar-blocks.txt`，一行一个方块 ID：
@@ -217,15 +230,19 @@ src/main/java/com/scx/containerradar/
 ├── compat/
 │   └── LootrCompat.java           Lootr 状态识别（纯反射，不硬依赖）
 ├── config/
-│   └── Settings.java              用户设置（半径 / 开关 / 渲染上限）
+│   └── Settings.java              用户设置（总开关 / 半径 / 显示开关 / 渲染上限）
 ├── filter/
 │   └── BlockFilter.java           自定义方块白名单 + 配置文件读写
+├── gui/
+│   └── SettingsScreen.java        设置界面（开关、滑块、搜索、白名单管理）
 ├── key/
-│   └── KeyBindings.java           准星选取快捷键（K 加入 / L 移出）
+│   └── KeyBindings.java           快捷键（J 开关 / K 加入 / L 移出 / O 设置）
 ├── render/
 │   └── ContainerRenderer.java     穿墙线框渲染（双 pass）
-└── scan/
-    └── ContainerScanner.java      目标扫描（按区块遍历，指令与渲染共用）
+├── scan/
+│   └── ContainerScanner.java      目标扫描（按区块遍历，指令与渲染共用）
+└── search/
+    └── BlockIndex.java            方块索引（ID + 本地化名称，供搜索用）
 ```
 
 几个关键的分层：

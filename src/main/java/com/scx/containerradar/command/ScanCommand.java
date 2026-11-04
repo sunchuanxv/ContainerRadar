@@ -2,12 +2,14 @@ package com.scx.containerradar.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.scx.containerradar.config.Settings;
 import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.scan.ContainerScanner;
+import com.scx.containerradar.search.BlockIndex;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -20,8 +22,10 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraftforge.registries.ForgeRegistries;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * {@code /cr} 指令树：扫描、增删自定义方块白名单。
@@ -133,6 +137,15 @@ public final class ScanCommand {
                         .then(Commands.literal("list")
                                 .executes(ScanCommand::executeList))
 
+                        // --- /cr search <关键词> ---
+                        // 同时匹配方块 ID 和本地化名称，中文直接搜即可。
+                        // 用 greedyString 是因为名称里可能有空格（如 "Polished Deepslate Stairs"），
+                        // 也方便一次搜多个词。
+                        .then(Commands.literal("search")
+                                .then(Commands.argument("keyword", StringArgumentType.greedyString())
+                                        .executes(ctx -> executeSearch(ctx,
+                                                StringArgumentType.getString(ctx, "keyword")))))
+
                         // --- /cr radius <半径> ---
                         .then(Commands.literal("radius")
                                 .then(Commands.argument("radius",
@@ -172,6 +185,7 @@ public final class ScanCommand {
             "  /cr radius <8~64>      设置扫描半径（写入配置文件）",
             "  /cr add <方块ID>       加入自定义白名单",
             "  /cr remove <方块ID>    移出白名单",
+            "  /cr search <关键词>    按 ID 或名称搜索方块（支持中文）",
             "  /cr list               查看当前白名单",
             "  /cr reload             重新读取配置文件",
     };
@@ -340,6 +354,45 @@ public final class ScanCommand {
     private static int error(CommandContext<CommandSourceStack> ctx, String message) {
         ctx.getSource().sendFailure(Component.literal("[ContainerRadar] " + message).withStyle(ChatFormatting.RED));
         return 0;
+    }
+
+    // ==================================================================
+    // /cr search
+    // ==================================================================
+
+    /**
+     * 按关键词搜索方块，同时匹配 ID 和本地化名称。
+     *
+     * <p>这个指令的主要用途是<b>验证搜索索引</b>：在接图形界面之前，先确认
+     * 中文名称能搜到、索引构建耗时可以接受，避免把问题带进 GUI 里。
+     */
+    private static int executeSearch(CommandContext<CommandSourceStack> ctx, String keyword) {
+        long startNanos = System.nanoTime();
+        BlockIndex.Result result = BlockIndex.search(keyword, MAX_LISTED);
+        long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;
+
+        if (result.total() == 0) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal("没有匹配「" + keyword + "」的方块").withStyle(ChatFormatting.GRAY),
+                    false);
+            return 0;
+        }
+
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("「" + keyword + "」匹配 " + result.total() + " 个方块"
+                                + "（显示前 " + result.entries().size() + " 个，耗时 " + elapsedMs + " ms）")
+                        .withStyle(ChatFormatting.AQUA), false);
+
+        // 已经加进白名单的标出来，避免玩家重复添加
+        Set<ResourceLocation> existing = new HashSet<>(BlockFilter.ids());
+        for (BlockIndex.Entry entry : result.entries()) {
+            String mark = existing.contains(entry.id()) ? " [已加]" : "";
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal("  " + entry.id() + "  " + entry.name() + mark)
+                            .withStyle(ChatFormatting.GRAY), false);
+        }
+
+        return result.total();
     }
 
     // ==================================================================
