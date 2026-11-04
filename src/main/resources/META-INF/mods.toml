@@ -14,7 +14,10 @@ license="${mod_license}"
 #issueTrackerURL="https://change.me.to.your.issue.tracker.example.invalid/" #optional
 # If your mod is purely client-side and has no multiplayer functionality (be it dedicated servers or Open to LAN),
 # set this to true, and Forge will set the correct displayTest for you and skip loading your mod on dedicated servers.
-#clientSideOnly=true #optional - defaults to false if absent
+# 本模组只影响画面（渲染 / 界面 / 快捷键 / 客户端指令），所以设为 true：
+#   - 专用服务器会直接跳过加载，不占内存、不建方块索引
+#   - Forge 自动设置合适的 displayTest，玩家连服时不会看到"服务端缺少模组"
+clientSideOnly=true #optional - defaults to false if absent
 # A list of mods - how many allowed here is determined by the individual mod loader
 [[mods]] #mandatory
 # The modid of the mod
@@ -39,7 +42,11 @@ authors="${mod_authors}" #optional
 # IGNORE_ALL_VERSION means that your mod will not cause a red X if it's present on the client or the server. This is a special case and should only be used if your mod has no server component.
 # NONE means that no display test is set on your mod. You need to do this yourself, see IExtensionPoint.DisplayTest for more information. You can define any scheme you wish with this value.
 # IMPORTANT NOTE: this is NOT an instruction as to which environments (CLIENT or DEDICATED SERVER) your mod loads on. Your mod should load (and maybe do nothing!) whereever it finds itself.
-#displayTest="MATCH_VERSION" # if nothing is specified, MATCH_VERSION is the default when clientSideOnly=false, otherwise IGNORE_ALL_VERSION when clientSideOnly=true (#optional)
+# 本项目是纯客户端模组（只影响画面），所以用 IGNORE_ALL_VERSION：
+# 无论服务器装没装、装的是什么版本，都不显示红叉，也不会阻止玩家进服。
+# 用默认的 MATCH_VERSION 会让装了本模组的玩家在连服务器时看到"服务端缺少模组"的警告，
+# 实际上完全不影响使用。
+displayTest="IGNORE_ALL_VERSION" # optional
 
 # Access Transformers
 # Optional, if not specified Forge will attempt to find the default META-INF/accesstransformer.cfg and silently continue if not found. May default to an empty list in a future MC.

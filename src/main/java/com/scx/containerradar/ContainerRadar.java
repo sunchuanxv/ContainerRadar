@@ -1,10 +1,7 @@
 package com.scx.containerradar;
 
 import com.mojang.logging.LogUtils;
-import com.scx.containerradar.command.ScanCommand;
 import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
@@ -39,15 +36,10 @@ public class ContainerRadar
 
     public ContainerRadar(FMLJavaModLoadingContext context)
     {
-        // 把自己注册到 Forge 事件总线：主类里所有 @SubscribeEvent 方法（比如 onRegisterCommands）
-        // 都靠这一句才能收到事件。mod 事件总线（context.getModEventBus()）目前还没用到 ——
-        // 它用于注册方块/物品/按键这类"加载期"事件，等真需要时再加。
-        MinecraftForge.EVENT_BUS.register(this);
-    }
-
-    @SubscribeEvent
-    public void onRegisterCommands(RegisterCommandsEvent event) {
-        ScanCommand.register(event.getDispatcher());
+        // 构造函数现在没有需要注册的东西：所有事件监听都挂在
+        // @Mod.EventBusSubscriber 标注的静态类上（ClientModEvents / ClientCommands /
+        // ContainerRenderer / KeyBindings），由 Forge 自动注册。
+        // 保留这个构造函数是因为 @Mod 需要一个可实例化的类。
     }
 
     // You can use EventBusSubscriber to automatically register all static methods in the class annotated with @SubscribeEvent
