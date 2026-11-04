@@ -2,15 +2,16 @@ package com.scx.containerradar.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
-import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.scx.containerradar.config.Settings;
 import com.scx.containerradar.filter.BlockFilter;
 import com.scx.containerradar.scan.ContainerScanner;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.ResourceLocationArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -20,6 +21,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * {@code /cr} 指令树：扫描、增删自定义方块白名单。
@@ -46,6 +48,44 @@ public final class ScanCommand {
     /** /cr list 最多显示多少条，避免白名单塞了几百个时刷屏。 */
     private static final int MAX_FILTER_LISTED = 20;
 
+    /** Tab 补全最多返回多少条。 */
+    private static final int MAX_SUGGESTIONS = 50;
+
+    /** Tab 补全至少要输入几个字符。 */
+    private static final int MIN_SUGGEST_PREFIX = 2;
+
+    /**
+     * 方块 ID 的 Tab 补全，{@code /cr add} 和 {@code /cr remove} 共用。
+     *
+     * <p>为什么必须限制：
+     * <ul>
+     *   <li><b>至少 2 个字符</b>：{@code ForgeRegistries.BLOCKS} 里有三万多个方块，
+     *       输入为空时把全部建议发给客户端，单次数据量能到 1 MB，客户端会卡住</li>
+     *   <li><b>最多 50 条</b>：补全列表本身也有渲染上限，几百条既刷屏又不好选</li>
+     * </ul>
+     *
+     * <p>匹配用的是 {@code contains} 而不是 {@code startsWith}：玩家通常记得"词根"而不是开头，
+     * 输 {@code debris} 就能找到 {@code ancient_debris}，比要求从头匹配好用得多。
+     */
+    private static final SuggestionProvider<CommandSourceStack> BLOCK_ID_SUGGESTIONS = (context, builder) -> {
+        // 小写化以便忽略大小写匹配（方块 ID 本身全是小写，但玩家可能输入大写）
+        String typed = builder.getRemaining().toLowerCase(Locale.ROOT);
+        if (typed.length() < MIN_SUGGEST_PREFIX) {
+            return builder.buildFuture();
+        }
+
+        int added = 0;
+        for (ResourceLocation id : ForgeRegistries.BLOCKS.getKeys()) {
+            if (id.toString().contains(typed)) {
+                builder.suggest(id.toString());
+                if (++added >= MAX_SUGGESTIONS) {
+                    break;
+                }
+            }
+        }
+        return builder.buildFuture();
+    };
+
     private ScanCommand() {
     }
 
@@ -70,17 +110,24 @@ public final class ScanCommand {
                                         .executes(ctx -> executeScan(ctx, IntegerArgumentType.getInteger(ctx, "radius")))))
 
                         // --- /cr add <block> ---
-                        // 这里必须用 StringArgumentType.string() 而不是 word()：
-                        // word() 不允许冒号，minecraft:chest 这种 ID 会直接解析失败。
-                        // 这个坑很隐蔽 —— 参数类型选错，玩家输入什么都是"格式错误"。
+                        // 用 ResourceLocationArgument.id() 而不是 StringArgumentType：
+                        // Brigadier 的 readString() 会在冒号处停下（实测 "minecraft:x" 只读到 "minecraft"），
+                        // 所以字符串参数根本无法接收带命名空间的方块 ID，Tab 补全一插入就报
+                        // "参数后应有空格分隔，但发现了尾随数据"。
+                        // ResourceLocationArgument 是原版专为此设计的：它按 ID 的字符集读，
+                        // 允许冒号，且不带前缀时自动补 minecraft:。
                         .then(Commands.literal("add")
-                                .then(Commands.argument("block", StringArgumentType.string())
-                                        .executes(ctx -> executeAdd(ctx, StringArgumentType.getString(ctx, "block")))))
+                                .then(Commands.argument("block", ResourceLocationArgument.id())
+                                        .suggests(BLOCK_ID_SUGGESTIONS)
+                                        .executes(ctx -> executeAdd(ctx,
+                                                ResourceLocationArgument.getId(ctx, "block")))))
 
                         // --- /cr remove <block> ---
                         .then(Commands.literal("remove")
-                                .then(Commands.argument("block", StringArgumentType.string())
-                                        .executes(ctx -> executeRemove(ctx, StringArgumentType.getString(ctx, "block")))))
+                                .then(Commands.argument("block", ResourceLocationArgument.id())
+                                        .suggests(BLOCK_ID_SUGGESTIONS)
+                                        .executes(ctx -> executeRemove(ctx,
+                                                ResourceLocationArgument.getId(ctx, "block")))))
 
                         // --- /cr list ---
                         .then(Commands.literal("list")
@@ -214,13 +261,9 @@ public final class ScanCommand {
     // /cr add
     // ==================================================================
 
-    private static int executeAdd(CommandContext<CommandSourceStack> ctx, String input) {
-        ResourceLocation id = BlockFilter.parseId(input);
-
-        // 三种失败情况分开报错，比统一说"失败"有用得多
-        if (id == null) {
-            return error(ctx, "方块 ID 格式不对：" + input + "（应形如 minecraft:ancient_debris）");
-        }
+    private static int executeAdd(CommandContext<CommandSourceStack> ctx, ResourceLocation id) {
+        // ID 的语法合法性由 ResourceLocationArgument 保证，这里只校验"这个方块是否存在"。
+        // 注意不能用 getValue(id) != null 判断 —— Forge 对未知 ID 返回默认值（空气）而不是 null。
         if (!BlockFilter.isRegisteredBlock(id)) {
             return error(ctx, "找不到这个方块：" + id + "（注意 ID 必须全小写）");
         }
@@ -247,12 +290,7 @@ public final class ScanCommand {
     // /cr remove
     // ==================================================================
 
-    private static int executeRemove(CommandContext<CommandSourceStack> ctx, String input) {
-        ResourceLocation id = BlockFilter.parseId(input);
-        if (id == null) {
-            return error(ctx, "方块 ID 格式不对：" + input);
-        }
-
+    private static int executeRemove(CommandContext<CommandSourceStack> ctx, ResourceLocation id) {
         if (!BlockFilter.remove(id)) {
             ctx.getSource().sendSuccess(
                     () -> Component.literal(id + " 不在白名单里").withStyle(ChatFormatting.GRAY), false);

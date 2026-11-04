@@ -177,26 +177,6 @@ public final class BlockFilter {
     }
 
     /**
-     * 把玩家输入的字符串解析成方块 ID。
-     *
-     * <p>支持简写：不带冒号时自动补 {@code minecraft:}，所以 {@code /cr add ancient_debris}
-     * 和 {@code /cr add minecraft:ancient_debris} 效果一样。少打几个字，体验差别很大。
-     *
-     * @param input 玩家输入，如 {@code ancient_debris} 或 {@code create:zinc_ore}
-     * @return 解析成功返回 ID，格式非法返回 {@code null}
-     */
-    public static ResourceLocation parseId(String input) {
-        String text = input.trim();
-        if (text.isEmpty()) {
-            return null;
-        }
-        if (!text.contains(":")) {
-            text = "minecraft:" + text;
-        }
-        return ResourceLocation.tryParse(text);
-    }
-
-    /**
      * 检查某个 ID 是否真的对应一个已注册的方块。
      *
      * <p>不检查的话，玩家能往白名单里塞 {@code minecraft:not_a_block}，

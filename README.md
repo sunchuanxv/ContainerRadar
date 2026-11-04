@@ -239,6 +239,12 @@ src/main/java/com/scx/containerradar/
 
 开发过程中真实遇到过、并且值得记下来的问题：
 
+- **`StringArgumentType.string()` 会在冒号处截断**。它的底层是 `StringReader.readString()`，
+  实测输入 `minecraft:diamond_ore` 只读到 `minecraft`，剩下 `:diamond_ore` 变成"尾随数据"，
+  报 `Expected whitespace to end one argument`。所以指令参数要想接收带命名空间的 ID，
+  必须用原版的 `ResourceLocationArgument.id()`——它按 ID 的字符集解析，允许冒号，
+  还会自动给不带前缀的输入补 `minecraft:`。这个坑只有在接 Tab 补全（补全给的是完整 ID）时才暴露。
+- **`StringArgumentType.word()` 更严格**，连冒号都不允许，用它在指令里接方块 ID 一定失败。
 - **`ForgeRegistries.BLOCKS.getValue(id)` 对不存在的 ID 返回 `Blocks.AIR` 而不是 `null`**。
   所以 `getValue(id) != null` 永远成立，无法用来校验 ID 合法性 —— 必须用 `containsKey(id)`。
   教训：想知道一个键在不在，不要"取出来再判空"。
