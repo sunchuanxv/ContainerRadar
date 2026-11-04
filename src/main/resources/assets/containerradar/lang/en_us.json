@@ -1,6 +1,7 @@
 {
   "key.categories.containerradar": "Container Radar",
   "key.containerradar.toggle": "Toggle Container Radar",
+  "key.containerradar.open_settings": "Open settings screen",
   "key.containerradar.add_target": "Add looked-at block to whitelist",
   "key.containerradar.remove_target": "Remove looked-at block from whitelist"
 }

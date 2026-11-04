@@ -59,6 +59,10 @@ public final class ScanCommand {
         dispatcher.register(
                 Commands.literal("cr")
 
+                        // 只敲 /cr 时打印帮助。父节点如果不挂 .executes()，
+                        // 玩家敲它只会得到一个没头没尾的报错 —— 新玩家根本不知道该敲什么。
+                        .executes(ScanCommand::executeHelp)
+
                         // --- /cr scan [radius] ---
                         .then(Commands.literal("scan")
                                 .executes(ctx -> executeScan(ctx, Settings.radius()))
@@ -101,6 +105,45 @@ public final class ScanCommand {
                         .then(Commands.literal("reload")
                                 .executes(ScanCommand::executeReload))
         );
+    }
+
+    // ==================================================================
+    // /cr（帮助）
+    // ==================================================================
+
+    /**
+     * 帮助文本。
+     *
+     * <p>放在静态数组里而不是一个个 sendSuccess 调用，好处是改文案只动这里，
+     * 也不用担心漏掉某一行。
+     */
+    private static final String[] HELP_LINES = {
+            "  /cr scan [半径]        扫描并列出目标（不带半径时用配置里的值）",
+            "  /cr toggle             开启 / 关闭全部高亮",
+            "  /cr toggle containers  单独开关容器高亮",
+            "  /cr toggle whitelist   单独开关白名单高亮",
+            "  /cr radius <8~64>      设置扫描半径（写入配置文件）",
+            "  /cr add <方块ID>       加入自定义白名单",
+            "  /cr remove <方块ID>    移出白名单",
+            "  /cr list               查看当前白名单",
+            "  /cr reload             重新读取配置文件",
+    };
+
+    /** 打印指令列表。只敲 {@code /cr} 就会走到这里。 */
+    private static int executeHelp(CommandContext<CommandSourceStack> ctx) {
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("[ContainerRadar] 指令列表").withStyle(ChatFormatting.AQUA), false);
+
+        // 逐行发送而不是拼成一个多行 Component：聊天栏会自然换行，也方便逐条复制
+        for (String line : HELP_LINES) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal(line).withStyle(ChatFormatting.GRAY), false);
+        }
+
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("快捷键：K 加入准星方块 · L 移出 · J 开关全部")
+                        .withStyle(ChatFormatting.DARK_GRAY), false);
+        return 1;
     }
 
     // ==================================================================

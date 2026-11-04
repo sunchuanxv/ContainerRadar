@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.scx.containerradar.ContainerRadar;
 import com.scx.containerradar.config.Settings;
 import com.scx.containerradar.filter.BlockFilter;
+import com.scx.containerradar.gui.SettingsScreen;
 import com.scx.containerradar.render.ContainerRenderer;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.KeyMapping;
@@ -82,6 +83,14 @@ public final class KeyBindings {
             GLFW.GLFW_KEY_J,
             CATEGORY);
 
+    /** 打开设置界面，默认 O。 */
+    private static final KeyMapping OPEN_SETTINGS = new KeyMapping(
+            "key.containerradar.open_settings",
+            KeyConflictContext.IN_GAME,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_O,
+            CATEGORY);
+
     private KeyBindings() {
     }
 
@@ -94,6 +103,7 @@ public final class KeyBindings {
         event.register(ADD_TARGET);
         event.register(REMOVE_TARGET);
         event.register(TOGGLE);
+        event.register(OPEN_SETTINGS);
     }
 
     /**
@@ -113,6 +123,7 @@ public final class KeyBindings {
         boolean wantAdd = false;
         boolean wantRemove = false;
         boolean wantToggle = false;
+        boolean wantOpen = false;
         while (ADD_TARGET.consumeClick()) {
             wantAdd = true;
         }
@@ -122,13 +133,22 @@ public final class KeyBindings {
         while (TOGGLE.consumeClick()) {
             wantToggle = true;
         }
+        while (OPEN_SETTINGS.consumeClick()) {
+            wantOpen = true;
+        }
 
-        if (!wantAdd && !wantRemove && !wantToggle) {
+        if (!wantAdd && !wantRemove && !wantToggle && !wantOpen) {
             return;
         }
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) {
+            return;
+        }
+
+        // 打开设置界面不依赖准星指向，所以放在最前面判断
+        if (wantOpen) {
+            mc.setScreen(new SettingsScreen());
             return;
         }
 
