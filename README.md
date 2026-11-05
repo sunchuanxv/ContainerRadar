@@ -6,6 +6,8 @@
 ![Build](https://github.com/sunchuanxv/ContainerRadar/actions/workflows/build.yml/badge.svg)
 ![Release](https://img.shields.io/github/v/release/sunchuanxv/ContainerRadar)
 
+**下载**：[CurseForge](https://www.curseforge.com/minecraft/mc-mods/container-radar) · [GitHub Releases](https://github.com/sunchuanxv/ContainerRadar/releases)
+
 穿墙高亮附近的容器 —— 按**能力**识别，而不是按方块 ID。
 
 > A client-side Minecraft mod that highlights nearby containers through walls by
