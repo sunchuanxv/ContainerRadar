@@ -274,8 +274,6 @@ src/main/java/com/scx/containerradar/
 - **`RenderStateShard.LineStateShard` 是 protected**，包外无法引用，因此线宽只能用默认的 1 像素。
   网上教程说需要 Access Transformer，但那只针对 5 参数版的 `RenderType.create`；
   7 参数版是 public 的，自己 `new` 各个 state shard 就能绕过去。
-- **`StringArgumentType.word()` 不允许冒号**，用它接方块 ID 会让 `minecraft:chest` 直接解析失败。
-  要用 `string()`。
 
 ## 许可
 
