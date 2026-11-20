@@ -274,6 +274,76 @@ src/main/java/com/scx/containerradar/
 - **`RenderStateShard.LineStateShard` 是 protected**，包外无法引用，因此线宽只能用默认的 1 像素。
   网上教程说需要 Access Transformer，但那只针对 5 参数版的 `RenderType.create`；
   7 参数版是 public 的，自己 `new` 各个 state shard 就能绕过去。
+- **自建 `RenderType` 的深度状态在部分整合包里会被忽略**，表现为"线框只能看到没被遮挡的棱，
+  完全无法穿墙"。症状、复现环境、排查过程和修法见下方单独一节 —— 这是本项目踩过的
+  最有环境相关性、也最难定位的一个坑。
+
+### 案例：穿墙失效（自定义 RenderType 的深度状态被忽略）
+
+**症状**
+
+- 容器 / 白名单方块的线框正常显示，但**只有未被遮挡的棱可见**，墙后的部分完全不出现
+- 看起来像"穿墙那一遍渲染根本没执行"，但日志无任何报错
+- **按住连锁采集（FTB Ultimine）的按键时，穿墙突然恢复正常**
+
+**复现环境**
+
+| 项目 | 值 |
+| --- | --- |
+| 出问题的整合包 | 七七和小翔修仙世界（Forge 1.20.1，约 170 个模组） |
+| 正常的整合包 | 愚者 0.3.2（约 231 个模组） |
+| 受影响版本 | 0.6.1 及更早；0.6.2 已修复 |
+
+**已逐个实验排除的因素**
+
+| 因素 | 结论 |
+| --- | --- |
+| 光影开关 | 开 / 关都复现 → 不是光影包的问题 |
+| 图形模式 | Fast / Fancy 都复现 → 不是渲染模式 |
+| `rubidium-extra` | 单独禁用后仍复现 |
+| `BadOptimizations` | 单独禁用后仍复现 |
+| `FTB Ultimine` | 两个整合包都装了 → 不可能是原因（它只是"触发器"） |
+| **Oculus 版本** | **1.8.0（异常）vs 1.7.0（正常），未做最终验证 —— 剩余嫌疑** |
+
+**定位过程（这套思路可以复用到其他渲染兼容问题）**
+
+1. 先分清是"没画出来"还是"画了被挡住"——两者修法完全不同，别一上来就改代码
+2. 关键线索是偶然发现的：按住 FTB Ultimine 就能穿墙。而 Ultimine 激活时做的正是
+   **全局关闭深度测试**
+3. 由此确定：**顶点一直都在提交，只是深度状态没生效**，深度函数还是默认的 `LEQUAL`，
+   所以线框被正常遮挡
+4. 结论：`DepthTestStateShard("always", GL_ALWAYS)` 的设置在部分环境下被 GL 状态缓存跳过了
+   （缓存认为"状态没变"，于是没有真正调用 `glDepthFunc`）。像 Oculus 这类会**直接操作原始
+   GL 状态**的模组，最容易造成缓存与实际状态不同步
+
+**修法**
+
+不再经过 `RenderType`，改为手动设状态 + 手动提交：
+
+```java
+RenderSystem.disableDepthTest();       // 关"能力"，而不是改"深度函数"
+RenderSystem.depthMask(false);
+RenderSystem.enableBlend();
+RenderSystem.defaultBlendFunc();
+RenderSystem.disableCull();
+
+BufferUploader.drawWithShader(builder.end());
+
+// 用完必须逐项还原，漏一项会污染后续所有渲染
+RenderSystem.depthMask(true);
+RenderSystem.enableDepthTest();
+RenderSystem.disableBlend();
+RenderSystem.enableCull();
+```
+
+关键点：**"关掉深度测试能力"和"修改深度函数"是两个不同的缓存条目**，前者不会撞上同一个问题；
+而 `BufferUploader.drawWithShader` 只按当前状态绘制，不会回头改状态，所以设完就一定是想要的效果。
+
+**如果你遇到类似现象**
+
+某个模组画的线框 / ESP 在特定整合包里"被方块挡住"，而**按住某个自带高亮功能的模组的按键
+就恢复正常** —— 大概率是同一类问题：你渲染类型里的深度状态被忽略了。
+按上面第 1~3 步确认，再用上面的修法绕开 `RenderType`。
 
 ## 许可
 

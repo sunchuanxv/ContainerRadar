@@ -1,6 +1,8 @@
 package com.scx.containerradar.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -14,7 +16,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -25,7 +26,6 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import org.lwjgl.opengl.GL11;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -77,66 +77,6 @@ public final class ContainerRenderer {
 
     /** 第二遍（穿墙）的透明度：比较淡，避免和第一遍混成一片。 */
     private static final float ALPHA_GHOST = 0.35F;
-
-    /**
-     * 半透明混合状态。
-     *
-     * <p>这是显卡的两个开关：{@code enableBlend} 打开混合，{@code defaultBlendFunc} 指定
-     * "按 alpha 通道混合"。不打开混合的话，顶点里的 alpha 值会被忽略，线框变成纯色不透明。
-     *
-     * <p>构造器要两个 Runnable：第一个在"开始画之前"执行，第二个在"画完之后"执行。
-     * <b>后面那个必须把状态还原</b>，否则会污染游戏后续所有渲染 —— 这是渲染代码最容易出事的地方。
-     */
-    private static final RenderStateShard.TransparencyStateShard TRANSLUCENT = new RenderStateShard.TransparencyStateShard(
-            "containerradar_translucent",
-            () -> {
-                RenderSystem.enableBlend();
-                RenderSystem.defaultBlendFunc();
-            },
-            () -> {
-                RenderSystem.disableBlend();
-                RenderSystem.defaultBlendFunc();
-            });
-
-    /**
-     * 自定义渲染类型：和原版 {@code RenderType.lines()} 几乎一样，只有两处不同。
-     *
-     * <p><b>注意这里没有用 Access Transformer。</b>网上很多教程说必须加 AT，那是因为它们用的是
-     * 包内可见的 5 参数版 {@code RenderType.create}。这里用的是 7 参数版，它在 Forge 1.20.1 里是
-     * public 的，不需要改任何访问权限。同理，{@code RenderStateShard.NO_DEPTH_TEST} 这类预置常量
-     * 是 protected 拿不到，但它们的<b>构造器都是 public</b>，所以自己 new 一个效果完全一样。
-     *
-     * <p>逐项说明：
-     * <ul>
-     *   <li>{@code DefaultVertexFormat.POSITION_COLOR_NORMAL} —— 每个顶点携带"坐标 + 颜色 + 法线"。
-     *       画线段必须带法线，否则着色器算不出亮度</li>
-     *   <li>{@code VertexFormat.Mode.LINES} —— 每两个顶点连成一条线段</li>
-     *   <li>{@code 1536} —— 缓冲区初始大小（字节），一个方块框 24 个顶点绰绰有余</li>
- *   <li><b>线宽</b>这里没设，用的是默认的 1 像素。原因是 {@code RenderStateShard.LineStateShard}
- *       这个<b>类</b>是 protected（虽然它的构造器是 public），在包外无法引用 ——
- *       这是 Forge 1.20.1 里少数几个必须靠 Access Transformer 才能用的东西。
- *       1 像素已经够看清，不值得为此引入 AT 的复杂度。想要更粗的线可以以后再研究</li>
-     *   <li>{@code DepthTestStateShard("always", GL_ALWAYS)} —— <b>核心</b>：深度测试永远通过，
-     *       等于"无视前面有没有东西挡着"，这就是穿墙的实现</li>
-     *   <li>{@code WriteMaskStateShard(true, false)} —— 写颜色、<b>不写深度</b>。
-     *       如果不写深度，后面画的 GUI 等元素就不会被这些线框"挡住"</li>
-     *   <li>{@code CullStateShard(false)} —— 关闭背面剔除，线框从两侧都能看到</li>
-     * </ul>
-     */
-    private static final RenderType SEE_THROUGH_LINES = RenderType.create(
-            "containerradar_see_through_lines",
-            DefaultVertexFormat.POSITION_COLOR_NORMAL,
-            VertexFormat.Mode.LINES,
-            1536,
-            false,
-            false,
-            RenderType.CompositeState.builder()
-                    .setShaderState(new RenderStateShard.ShaderStateShard(GameRenderer::getRendertypeLinesShader))
-                    .setTransparencyState(TRANSLUCENT)
-                    .setDepthTestState(new RenderStateShard.DepthTestStateShard("always", GL11.GL_ALWAYS))
-                    .setWriteMaskState(new RenderStateShard.WriteMaskStateShard(true, false))
-                    .setCullState(new RenderStateShard.CullStateShard(false))
-                    .createCompositeState(false));
 
     /**
      * 扫描结果缓存。渲染时直接用这个，不再查任何东西 —— 这是性能的关键。
@@ -236,10 +176,12 @@ public final class ContainerRenderer {
         // 这里按类型分别提交，是为了让两遍用各自的状态（一个开深度、一个关深度）。
         buffers.endBatch(RenderType.lines());
 
-        // 【第五步·第二遍】关掉深度测试的淡色框，能透过墙看到
-        VertexConsumer ghost = buffers.getBuffer(SEE_THROUGH_LINES);
-        drawAll(poseStack, ghost, ALPHA_GHOST);
-        buffers.endBatch(SEE_THROUGH_LINES);
+        // 【第五步·第二遍】关掉深度测试的淡色框，能透过墙看到。
+        //
+        // 这里刻意不走 RenderType，而是手动设 GL 状态 + 手动提交。原因见
+        // drawSeeThroughManually 的注释 —— 简单说：自建 RenderType 的
+        // DepthTestStateShard("always") 在部分渲染优化模组环境下不生效。
+        drawSeeThroughManually(poseStack, ALPHA_GHOST);
 
         // 和上面的 pushPose 配对。不 pop 的话，这个 translate 会残留，
         // 导致同一帧里后面所有渲染（血条、物品栏、其他模组的 ESP）全部跟着偏移。
@@ -269,6 +211,59 @@ public final class ContainerRenderer {
             // 它会把 12 条棱都画出来。自己算 12 条线的顶点纯属重复劳动。
             LevelRenderer.renderLineBox(poseStack, consumer, box, color[0], color[1], color[2], alpha);
         }
+    }
+
+    /**
+     * 手动画"穿墙"那一遍：完全手动设 GL 状态 + 手动提交顶点，<b>不经过 RenderType</b>。
+     *
+     * <h2>为什么不继续用自建的 RenderType</h2>
+     * 原本的做法是建一个 {@code RenderType}，把深度测试状态设成 {@code ALWAYS}
+     * （即"永远通过深度测试"），这在原版环境下工作正常。
+     *
+     * <p>但在某些渲染优化模组（Embeddium 组合）环境里，这个状态**不生效**：
+     * 线框被墙挡住，看起来像"根本没画"。现场证据很有说服力 —— 按住 FTB Ultimine
+     * 时线框突然能穿墙了，而 Ultimine 激活时做的正是"全局关闭深度测试"。
+     * 也就是说：顶点一直都画出来了，只是深度状态没被应用。
+     *
+     * <p>原因在于 GL 状态缓存：{@code DepthTestStateShard.setupState()} 里的
+     * "设置深度函数为 ALWAYS" 被状态缓存层跳过了（它认为状态没变），
+     * 于是深度函数还是默认的 {@code LEQUAL}，线框就被正常地遮挡了。
+     *
+     * <h2>手动方案为什么更可靠</h2>
+     * 直接把 {@code GL_DEPTH_TEST} 这个"能力"关掉（{@code disableDepthTest}），
+     * 而不是去改深度函数 —— 关能力是另一个缓存条目，不会撞上同一个问题。
+     * 而且 {@code BufferUploader.drawWithShader} 只按当前状态绘制，
+     * <b>不会再回头改任何状态</b>，所以设完就一定是我们要的状态。
+     *
+     * <p>代价是自己负责把状态还原（否则后面所有渲染都会异常），这也是这段代码
+     * 上下对称地 set/restore 的原因。
+     */
+    private static void drawSeeThroughManually(PoseStack poseStack, float alpha) {
+        // 自己 new 一个 BufferBuilder，而不是用 Tesselator 的共享实例 ——
+        // 共享实例可能正被别的模组使用，混用会互相破坏数据
+        BufferBuilder builder = new BufferBuilder(4096);
+        builder.begin(VertexFormat.Mode.LINES, DefaultVertexFormat.POSITION_COLOR_NORMAL);
+
+        // BufferBuilder 本身就实现了 VertexConsumer，所以几何生成逻辑可以完全复用
+        drawAll(poseStack, builder, alpha);
+
+        RenderSystem.setShader(GameRenderer::getRendertypeLinesShader);
+        RenderSystem.disableDepthTest();   // ← 核心：直接关掉深度测试能力
+        RenderSystem.depthMask(false);     // 不写深度，避免影响后画的元素
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.disableCull();
+
+        BufferBuilder.RenderedBuffer rendered = builder.end();
+        if (rendered != null) {
+            BufferUploader.drawWithShader(rendered);
+        }
+
+        // 逐项还原。漏一项就可能让手部渲染、粒子或其他模组的 ESP 出现异常
+        RenderSystem.depthMask(true);
+        RenderSystem.enableDepthTest();
+        RenderSystem.disableBlend();
+        RenderSystem.enableCull();
     }
 
     /**
